@@ -19,9 +19,7 @@
       packages = forEachSupportedSystem ({ pkgs }:
         let
           python = pkgs.python314;
-        in
-        rec {
-          default = tb-fitgirl;
+
           tb-fitgirl = python.pkgs.buildPythonApplication {
             pname = "tb-fitgirl";
             version = "0.1.0";
@@ -78,6 +76,42 @@
               mainProgram = "tb-fitgirl";
             };
           };
+
+          # Flutter Linux desktop front-end.  Only defined (and evaluated) on
+          # Linux; on Darwin the rec-level `default` falls back to tb-fitgirl.
+          tb-fitgirl-gui = pkgs.flutter.buildFlutterApplication {
+            pname = "tbfg-gui";
+            version = "0.1.0";
+            src = "${self}/gui";
+
+            pubspecLockFile = "${self}/gui/pubspec.lock";
+            # Obtain the real hash by running `nix build .#tb-fitgirl-gui` and
+            # replacing this placeholder with the value from the error message.
+            vendorHash = pkgs.lib.fakeHash;
+
+            nativeBuildInputs = with pkgs; [ cmake ninja clang pkg-config makeWrapper ];
+            buildInputs = with pkgs; [ gtk3 libsecret ];
+
+            # Put tb-fitgirl-bridge on PATH so the GUI can spawn it via stdio.
+            postInstall = ''
+              wrapProgram $out/bin/tbfg_gui \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ tb-fitgirl ]}
+            '';
+
+            meta = {
+              description = "Flutter GUI for tb-fitgirl";
+              mainProgram = "tbfg_gui";
+              platforms = pkgs.lib.platforms.linux;
+            };
+          };
+        in
+        {
+          inherit tb-fitgirl;
+          # On Linux the GUI is the primary entry-point; on Darwin fall back to
+          # the CLI (which works fine without a display).
+          default = if pkgs.stdenv.isLinux then tb-fitgirl-gui else tb-fitgirl;
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          inherit tb-fitgirl-gui;
         });
 
       devShells = forEachSupportedSystem ({ pkgs }:
