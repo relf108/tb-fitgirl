@@ -103,7 +103,7 @@
             # Put tb-fitgirl-bridge on PATH so the GUI can spawn it via stdio.
             postInstall = ''
               wrapProgram $out/bin/tbfg_gui \
-                --prefix PATH : ${pkgs.lib.makeBinPath [ tb-fitgirl ]}
+                --prefix PATH : ${pkgs.lib.makeBinPath [ tb-fitgirl pkgs.libsecret ]}
 
               install -Dm644 ${self}/gui/linux/tbfg_gui.desktop \
                 $out/share/applications/tbfg_gui.desktop
