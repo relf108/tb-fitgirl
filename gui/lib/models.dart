@@ -17,12 +17,12 @@ class SearchResult {
   final String source;
 
   factory SearchResult.fromJson(Map<String, dynamic> json) => SearchResult(
-    title: json['title'] as String? ?? '',
-    url: json['url'] as String? ?? '',
-    cached: json['cached'] as bool? ?? false,
-    sizeHuman: json['size_human'] as String? ?? '',
-    source: json['source'] as String? ?? '',
-  );
+        title: json['title'] as String? ?? '',
+        url: json['url'] as String? ?? '',
+        cached: json['cached'] as bool? ?? false,
+        sizeHuman: json['size_human'] as String? ?? '',
+        source: json['source'] as String? ?? '',
+      );
 }
 
 class AccountInfo {
@@ -37,10 +37,10 @@ class AccountInfo {
   final String expiry;
 
   factory AccountInfo.fromJson(Map<String, dynamic> json) => AccountInfo(
-    email: json['email'] as String? ?? '',
-    planName: json['plan_name'] as String? ?? '',
-    expiry: json['expiry'] as String? ?? '',
-  );
+        email: json['email'] as String? ?? '',
+        planName: json['plan_name'] as String? ?? '',
+        expiry: json['expiry'] as String? ?? '',
+      );
 }
 
 String humanRate(double bytesPerSec) {

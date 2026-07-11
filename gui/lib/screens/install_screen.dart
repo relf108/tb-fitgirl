@@ -56,11 +56,14 @@ class _InstallScreenState extends State<InstallScreen> {
 
   Future<void> _start() async {
     try {
-      final operation = await BridgeOperation.start('install', {
-        'target': widget.title,
-        'source': widget.source,
-        'api_key': widget.apiKey,
-      }, onProgress: _onProgress);
+      final operation = await BridgeOperation.start(
+          'install',
+          {
+            'target': widget.title,
+            'source': widget.source,
+            'api_key': widget.apiKey,
+          },
+          onProgress: _onProgress);
       _operation = operation;
       final result = await operation.result;
       if (!mounted) return;
@@ -139,8 +142,8 @@ class _InstallScreenState extends State<InstallScreen> {
   Widget _buildDone() {
     final result = _result!;
     final steamAdded = result['steam_added'] as bool? ?? false;
-    final manualSteps = (result['manual_steps'] as List<dynamic>? ?? [])
-        .cast<String>();
+    final manualSteps =
+        (result['manual_steps'] as List<dynamic>? ?? []).cast<String>();
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
