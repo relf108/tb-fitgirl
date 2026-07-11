@@ -48,6 +48,19 @@ def test_add_shortcut_roundtrip(steam_root):
     assert entry["tags"] == {}
 
 
+def test_add_shortcut_icon(steam_root):
+    vdf = steam.shortcuts_vdf(steam_root)
+    exe = Path("/games/DELTARUNE/DELTARUNE.exe")
+
+    steam.add_shortcut("DELTARUNE", exe, icon=Path("/icons/391540.jpg"), vdf_path=vdf)
+    entry = steam.load_shortcuts(vdf)["shortcuts"]["0"]
+    assert entry["icon"] == "/icons/391540.jpg"
+
+    # Default stays an empty string, not "None".
+    steam.add_shortcut("OTHER", Path("/games/OTHER/o.exe"), vdf_path=vdf)
+    assert steam.load_shortcuts(vdf)["shortcuts"]["1"]["icon"] == ""
+
+
 def test_add_shortcut_idempotent(steam_root):
     vdf = steam.shortcuts_vdf(steam_root)
     exe = Path("/games/DELTARUNE/DELTARUNE.exe")
@@ -64,6 +77,41 @@ def test_add_shortcut_appends_and_backs_up(steam_root):
     data = steam.load_shortcuts(vdf)
     assert [e["AppName"] for e in data["shortcuts"].values()] == ["Game A", "Game B"]
     assert vdf.with_suffix(".vdf.bak").is_file()
+
+
+def test_grid_dir(steam_root):
+    assert steam.grid_dir(steam_root) == (steam_root / "userdata" / "12345678" / "config" / "grid")
+
+
+def test_set_grid_art_writes_and_replaces_stale(tmp_path):
+    grid = tmp_path / "grid"
+    art = tmp_path / "header.jpg"
+    art.write_bytes(b"jpegbytes")
+
+    target = steam.set_grid_art(999, art, grid=grid)
+    assert target == grid / "999.jpg"
+    assert target.read_bytes() == b"jpegbytes"
+
+    # Switching image format replaces the old extension's file.
+    png = tmp_path / "header.png"
+    png.write_bytes(b"pngbytes")
+    target2 = steam.set_grid_art(999, png, grid=grid)
+    assert target2 == grid / "999.png"
+    assert not (grid / "999.jpg").exists()
+
+
+def test_remove_grid_art(tmp_path):
+    grid = tmp_path / "grid"
+    grid.mkdir()
+    (grid / "999.jpg").write_bytes(b"x")
+    (grid / "999p.png").write_bytes(b"x")
+    (grid / "999_hero.png").write_bytes(b"x")
+    (grid / "1000.jpg").write_bytes(b"other game")
+
+    assert steam.remove_grid_art(999, grid=grid) is True
+    assert list(grid.iterdir()) == [grid / "1000.jpg"]
+    assert steam.remove_grid_art(999, grid=grid) is False
+    assert steam.remove_grid_art(1, grid=tmp_path / "missing") is False
 
 
 def test_remove_shortcut(steam_root):

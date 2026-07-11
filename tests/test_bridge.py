@@ -55,6 +55,12 @@ def api_key(monkeypatch):
     monkeypatch.setenv("TORBOX_API_KEY", "test-key")
 
 
+@pytest.fixture(autouse=True)
+def no_icon_fetch(monkeypatch):
+    """Keep shortcut creation off the network; tests re-patch as needed."""
+    monkeypatch.setattr("tb_fitgirl.bridge.find_icon", lambda name, **kw: None)
+
+
 def test_invalid_json_line(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("not json\n[1,2]\n"))
     assert bridge.main() == 0
@@ -213,6 +219,10 @@ def _fake_steam_library(tmp_path, monkeypatch):
     common.mkdir(parents=True)
     monkeypatch.setattr(steam, "common_dir", lambda: common)
     monkeypatch.setattr(steam, "steam_running", lambda: False)
+    # Keep grid-art writes away from the real ~/.local/share/Steam userdata;
+    # tests that care about grid art re-patch these to capture calls.
+    monkeypatch.setattr(steam, "set_grid_art", lambda appid, image, **kw: image)
+    monkeypatch.setattr(steam, "remove_grid_art", lambda appid, **kw: False)
     return common
 
 
@@ -224,6 +234,8 @@ def test_uninstall(tmp_path, monkeypatch, capsys):
     game.mkdir()
     monkeypatch.setattr(steam, "remove_shortcut", lambda name: 123)
     monkeypatch.setattr("tb_fitgirl.bridge.remove_desktop_entry", lambda name: True)
+    grid_removed = []
+    monkeypatch.setattr(steam, "remove_grid_art", lambda appid, **kw: grid_removed.append(appid))
 
     events = run_bridge(
         [{"id": 1, "op": "uninstall", "args": {"target": "deltarune"}}], monkeypatch, capsys
@@ -231,6 +243,7 @@ def test_uninstall(tmp_path, monkeypatch, capsys):
     data = events_of(events, "result")[0]["data"]
     assert data["deleted"] is True
     assert data["removed_shortcut"] is True
+    assert grid_removed == [123]  # library art cleaned up with the shortcut
     assert not game.exists()
 
 
@@ -271,8 +284,10 @@ def test_steam_add(tmp_path, monkeypatch, capsys):
     game = common / "DELTARUNE"
     game.mkdir()
     (game / "DELTARUNE.exe").write_bytes(b"MZ" + b"\0" * 100)
-    monkeypatch.setattr(steam, "add_shortcut", lambda name, exe: 999)
-    monkeypatch.setattr("tb_fitgirl.bridge.write_desktop_entry", lambda name, appid: game / "e")
+    monkeypatch.setattr(steam, "add_shortcut", lambda name, exe, **kw: 999)
+    monkeypatch.setattr(
+        "tb_fitgirl.bridge.write_desktop_entry", lambda name, appid, **kw: game / "e"
+    )
 
     events = run_bridge(
         [{"id": 1, "op": "steam_add", "args": {"target": "deltarune"}}], monkeypatch, capsys
@@ -320,9 +335,9 @@ def _prep_install(tmp_path, monkeypatch, *, steam_running=False):
             on_progress(100, 100, 2.0, 0.0)
 
     monkeypatch.setattr("tb_fitgirl.bridge.install", fake_install)
-    monkeypatch.setattr(steam, "add_shortcut", lambda name, exe: 777)
+    monkeypatch.setattr(steam, "add_shortcut", lambda name, exe, **kw: 777)
     monkeypatch.setattr(
-        "tb_fitgirl.bridge.write_desktop_entry", lambda name, appid: tmp_path / "entry.desktop"
+        "tb_fitgirl.bridge.write_desktop_entry", lambda name, appid, **kw: tmp_path / "entry"
     )
     return repack_dir
 
@@ -501,6 +516,107 @@ def test_library_empty(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr("tb_fitgirl.bridge.APPLICATIONS_DIR", str(tmp_path / "applications"))
     events = run_bridge([{"id": 1, "op": "library"}], monkeypatch, capsys)
     assert events_of(events, "result")[0]["data"]["games"] == []
+
+
+@respx.mock
+def test_metadata_lookup(monkeypatch, capsys):
+    from tb_fitgirl.metadata import STORE_SEARCH_URL
+
+    route = respx.get(STORE_SEARCH_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "items": [
+                    {"id": 391540, "name": "DELTARUNE", "tiny_image": "https://cdn/x.jpg"},
+                ]
+            },
+        )
+    )
+    noisy = "DELTARUNE \u2013 v1.0 + Bonus OST [FitGirl Repack]"
+    events = run_bridge([{"id": 1, "op": "metadata", "args": {"name": noisy}}], monkeypatch, capsys)
+    data = events_of(events, "result")[0]["data"]
+    assert data == {"appid": 391540, "name": "DELTARUNE", "image": "https://cdn/x.jpg"}
+    # The store is queried with the de-noised game name, not the post title.
+    assert route.calls[0].request.url.params["term"] == "DELTARUNE"
+
+
+@respx.mock
+def test_metadata_no_confident_match(monkeypatch, capsys):
+    from tb_fitgirl.metadata import STORE_SEARCH_URL
+
+    respx.get(STORE_SEARCH_URL).mock(
+        return_value=Response(200, json={"items": [{"id": 1, "name": "Completely Unrelated Game"}]})
+    )
+    events = run_bridge(
+        [{"id": 1, "op": "metadata", "args": {"name": "DELTARUNE"}}], monkeypatch, capsys
+    )
+    data = events_of(events, "result")[0]["data"]
+    assert data == {"appid": None, "name": None, "image": None}
+
+
+def test_steam_add_passes_icon(tmp_path, monkeypatch, capsys):
+    from tb_fitgirl import steam
+
+    common = _fake_steam_library(tmp_path, monkeypatch)
+    game = common / "DELTARUNE"
+    game.mkdir()
+    (game / "DELTARUNE.exe").write_bytes(b"MZ" + b"\0" * 100)
+
+    icon = tmp_path / "391540.jpg"
+    icon.write_bytes(b"jpg")
+    monkeypatch.setattr("tb_fitgirl.bridge.find_icon", lambda name, **kw: icon)
+    seen = {}
+
+    def fake_add_shortcut(name, exe, **kw):
+        seen["shortcut_icon"] = kw.get("icon")
+        return 999
+
+    def fake_desktop(name, appid, **kw):
+        seen["desktop_icon"] = kw.get("icon")
+        return tmp_path / "e"
+
+    def fake_grid(appid, image, **kw):
+        seen["grid"] = (appid, image)
+        return tmp_path / "grid" / f"{appid}.jpg"
+
+    monkeypatch.setattr(steam, "add_shortcut", fake_add_shortcut)
+    monkeypatch.setattr("tb_fitgirl.bridge.write_desktop_entry", fake_desktop)
+    monkeypatch.setattr(steam, "set_grid_art", fake_grid)
+
+    events = run_bridge(
+        [{"id": 1, "op": "steam_add", "args": {"target": "deltarune"}}], monkeypatch, capsys
+    )
+    data = events_of(events, "result")[0]["data"]
+    assert data["icon"] == str(icon)
+    assert seen["shortcut_icon"] == icon
+    assert seen["desktop_icon"] == str(icon)
+    # Header art is installed as the shortcut's Steam library capsule too.
+    assert seen["grid"] == (999, icon)
+    assert data["grid"] == str(tmp_path / "grid" / "999.jpg")
+
+
+def test_library_includes_icon(tmp_path, monkeypatch, capsys):
+    from tb_fitgirl import steam
+    from tb_fitgirl.desktop import write_desktop_entry
+
+    common = _fake_steam_library(tmp_path, monkeypatch)
+    vdf = tmp_path / "shortcuts.vdf"
+    monkeypatch.setattr(steam, "shortcuts_vdf", lambda: vdf)
+    apps_dir = tmp_path / "applications"
+    monkeypatch.setattr("tb_fitgirl.bridge.APPLICATIONS_DIR", str(apps_dir))
+
+    game = common / "DELTARUNE"
+    game.mkdir()
+    exe = game / "DELTARUNE.exe"
+    exe.write_bytes(b"MZ")
+    icon = tmp_path / "391540.jpg"
+    icon.write_bytes(b"jpg")
+    appid = steam.add_shortcut("DELTARUNE", exe, icon=icon, vdf_path=vdf)
+    write_desktop_entry("DELTARUNE", appid, icon=str(icon), applications_dir=apps_dir)
+
+    events = run_bridge([{"id": 1, "op": "library"}], monkeypatch, capsys)
+    games = events_of(events, "result")[0]["data"]["games"]
+    assert games[0]["icon"] == str(icon)
 
 
 def test_sequential_requests_keep_ids(tmp_path, monkeypatch, capsys):

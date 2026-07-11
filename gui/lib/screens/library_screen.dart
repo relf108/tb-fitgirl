@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import '../bridge.dart';
@@ -138,11 +140,26 @@ class _LibraryScreenState extends State<LibraryScreen> {
       if (hasEntry) 'Launcher',
       if (!installed) 'files missing',
     ];
+    final icon = game['icon'] as String?;
+    final fallback = Icon(
+      installed ? Icons.videogame_asset : Icons.videogame_asset_off,
+      color: installed ? null : Theme.of(context).colorScheme.error,
+    );
     return ListTile(
-      leading: Icon(
-        installed ? Icons.videogame_asset : Icons.videogame_asset_off,
-        color: installed ? null : Theme.of(context).colorScheme.error,
-      ),
+      leading: icon != null
+          ? SizedBox(
+              width: 87,
+              height: 41,
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: Image.file(
+                  File(icon),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => fallback,
+                ),
+              ),
+            )
+          : fallback,
       title: Text(name),
       subtitle: Text(badges.join('  -  ')),
       trailing: busy

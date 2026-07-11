@@ -36,6 +36,7 @@ from .cli import _find_game_exe, _find_installed_dir, _find_repack_dir, _resolve
 from .desktop import APPLICATIONS_DIR, remove_desktop_entry, write_desktop_entry
 from .downloader import Downloader
 from .installer import InstallError, find_repack, install, verify_bins
+from .metadata import best_match, find_icon, store_search
 from .models import Torrent, TorrentFile, human_size, magnet_hash
 from .scrapers import DEFAULT_SCRAPER, SCRAPERS, get_scraper
 from .torbox import TorboxClient, TorboxError
@@ -239,9 +240,23 @@ def op_download(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
 def _add_shortcut(name: str, exe: Path, *, app_menu: bool) -> dict[str, Any]:
     if steam.steam_running():
         raise BridgeError("Steam is running; close it and retry.")
-    appid = steam.add_shortcut(name, exe)
-    entry = write_desktop_entry(name, appid) if app_menu else None
-    return {"appid": appid, "desktop_entry": entry.name if entry else None}
+    icon = find_icon(name)  # best-effort, None on any failure
+    appid = steam.add_shortcut(name, exe, icon=icon)
+    grid = None
+    if icon is not None:
+        # The same art doubles as the library header: it *is* Steam's wide
+        # capsule format (460x215). Best-effort like the icon itself.
+        try:
+            grid = steam.set_grid_art(appid, icon)
+        except (steam.SteamNotFound, OSError):
+            grid = None
+    entry = write_desktop_entry(name, appid, icon=str(icon) if icon else None) if app_menu else None
+    return {
+        "appid": appid,
+        "desktop_entry": entry.name if entry else None,
+        "icon": str(icon) if icon else None,
+        "grid": str(grid) if grid else None,
+    }
 
 
 def op_steam_add(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
@@ -368,11 +383,38 @@ def op_install(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _desktop_entry_name(path: Path) -> str | None:
+def _desktop_entry_value(path: Path, key: str) -> str | None:
+    prefix = f"{key}="
     for line in path.read_text(errors="replace").splitlines():
-        if line.startswith("Name="):
-            return line[len("Name=") :].replace("\\\\", "\\")
+        if line.startswith(prefix):
+            return line[len(prefix) :].replace("\\\\", "\\")
     return None
+
+
+def _usable_icon(icon: str | None) -> str | None:
+    """An icon value front-ends can render: an existing absolute file path."""
+    if icon and icon.startswith("/") and Path(icon).is_file():
+        return icon
+    return None
+
+
+def op_metadata(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    """Steam store lookup for a game name (appid/canonical name/thumbnail).
+
+    Best-effort by design: unknown or unmatched names yield null fields
+    rather than an error.
+    """
+    name = str(args.get("name") or "")
+    if not name:
+        raise BridgeError("metadata requires a name.")
+    term = _short_title(name)  # store search chokes on "+ DLCs [FitGirl]" noise
+    try:
+        match = best_match(term, store_search(term))
+    except httpx.HTTPError:
+        match = None
+    if match is None:
+        return {"appid": None, "name": None, "image": None}
+    return {"appid": match.appid, "name": match.name, "image": match.tiny_image or None}
 
 
 def op_library(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
@@ -405,6 +447,7 @@ def op_library(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
             "path": str(game_dir),
             "exe": exe,
             "appid": entry.get("appid"),
+            "icon": _usable_icon(str(entry.get("icon") or "")),
             "steam_shortcut": True,
             "launcher_entry": False,
             "installed": game_dir.is_dir(),
@@ -412,11 +455,13 @@ def op_library(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
 
     apps_dir = Path(APPLICATIONS_DIR).expanduser()
     for entry_path in sorted(apps_dir.glob("tb-fitgirl-*.desktop")):
-        name = _desktop_entry_name(entry_path)
+        name = _desktop_entry_value(entry_path, "Name")
         if not name:
             continue
+        icon = _usable_icon(_desktop_entry_value(entry_path, "Icon"))
         if name in games:
             games[name]["launcher_entry"] = True
+            games[name]["icon"] = games[name]["icon"] or icon
         else:
             game_dir = common / name
             games[name] = {
@@ -424,6 +469,7 @@ def op_library(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
                 "path": str(game_dir),
                 "exe": None,
                 "appid": None,
+                "icon": icon,
                 "steam_shortcut": False,
                 "launcher_entry": True,
                 "installed": game_dir.is_dir(),
@@ -458,7 +504,13 @@ def op_uninstall(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
     if not args.get("no_steam"):
         if steam.steam_running():
             raise BridgeError("Steam is running; close it and retry.")
-        removed_shortcut = steam.remove_shortcut(name) is not None
+        removed_appid = steam.remove_shortcut(name)
+        removed_shortcut = removed_appid is not None
+        if removed_appid is not None:
+            try:
+                steam.remove_grid_art(removed_appid)
+            except steam.SteamNotFound:
+                pass
     removed_entry = remove_desktop_entry(name)
 
     if not keep_files:
@@ -481,6 +533,7 @@ OPS: dict[str, Callable[[EmitFn, dict[str, Any]], dict[str, Any]]] = {
     "install": op_install,
     "steam_add": op_steam_add,
     "library": op_library,
+    "metadata": op_metadata,
     "uninstall": op_uninstall,
 }
 

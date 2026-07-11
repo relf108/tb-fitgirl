@@ -32,6 +32,42 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _searching = false;
   String _status = 'Type a title to search.';
   List<SearchResult> _results = const [];
+  final Map<String, Future<String?>> _thumbnails = {};
+
+  /// Lazy per-title store thumbnail lookup, cached for the app's lifetime.
+  Future<String?> _thumbnailUrl(String title) {
+    return _thumbnails.putIfAbsent(title, () async {
+      try {
+        final data = await runBridgeOp('metadata', {'name': title});
+        return data['image'] as String?;
+      } on BridgeException {
+        return null;
+      }
+    });
+  }
+
+  Widget _thumbnail(SearchResult result) {
+    const fallback = Icon(Icons.videogame_asset, size: 32);
+    return SizedBox(
+      width: 87,
+      height: 33,
+      child: FutureBuilder<String?>(
+        future: _thumbnailUrl(result.title),
+        builder: (context, snapshot) {
+          final url = snapshot.data;
+          if (url == null) return fallback;
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: Image.network(
+              url,
+              fit: BoxFit.cover,
+              errorBuilder: (_, __, ___) => fallback,
+            ),
+          );
+        },
+      ),
+    );
+  }
 
   @override
   void dispose() {
@@ -228,18 +264,25 @@ class _HomeScreenState extends State<HomeScreen> {
                 final result = _results[index];
                 return ListTile(
                   title: Text(result.title),
-                  subtitle: Text(
-                    result.sizeHuman.isEmpty ? result.url : result.sizeHuman,
-                  ),
-                  leading: result.cached
-                      ? const Tooltip(
-                          message: 'Cached on TorBox',
-                          child: Icon(Icons.cloud_done, color: Colors.green),
-                        )
-                      : const Tooltip(
-                          message: 'Not cached: TorBox must fetch it first',
-                          child: Icon(Icons.cloud_off),
+                  subtitle: Row(
+                    children: [
+                      Tooltip(
+                        message: result.cached
+                            ? 'Cached on TorBox'
+                            : 'Not cached: TorBox must fetch it first',
+                        child: Icon(
+                          result.cached ? Icons.cloud_done : Icons.cloud_off,
+                          size: 16,
+                          color: result.cached ? Colors.green : null,
                         ),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(result.sizeHuman.isEmpty
+                          ? (result.cached ? 'cached' : 'not cached')
+                          : result.sizeHuman),
+                    ],
+                  ),
+                  leading: _thumbnail(result),
                   trailing: FilledButton.icon(
                     icon: const Icon(Icons.download),
                     label: const Text('Install'),

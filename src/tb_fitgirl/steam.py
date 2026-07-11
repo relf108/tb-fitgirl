@@ -239,6 +239,7 @@ def add_shortcut(
     *,
     start_dir: Path | None = None,
     launch_options: str = "",
+    icon: Path | str | None = None,
     vdf_path: Path | None = None,
 ) -> int:
     """Append a non-Steam game (idempotent by name+exe). Returns its appid.
@@ -261,7 +262,7 @@ def add_shortcut(
         "AppName": name,
         "Exe": exe_quoted,
         "StartDir": f'"{start_dir or exe.parent}"',
-        "icon": "",
+        "icon": str(icon) if icon else "",
         "ShortcutPath": "",
         "LaunchOptions": launch_options,
         "IsHidden": 0,
@@ -280,6 +281,40 @@ def add_shortcut(
         shutil.copy2(vdf_path, vdf_path.with_suffix(".vdf.bak"))
     vdf_path.write_bytes(_write_map(data))
     return appid
+
+
+def grid_dir(root: Path | None = None) -> Path:
+    """Custom-artwork directory for the most recently used Steam user."""
+    return shortcuts_vdf(root).parent / "grid"
+
+
+def set_grid_art(appid: int, image: Path, *, grid: Path | None = None) -> Path:
+    """Install *image* as a shortcut's header (wide capsule) in Steam's grid.
+
+    Steam reads userdata/<uid>/config/grid/<appid>.<ext> as the custom
+    horizontal capsule for non-Steam shortcuts. Read on startup like
+    shortcuts.vdf, so Steam should be closed. Returns the path written.
+    """
+    directory = grid if grid is not None else grid_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / f"{appid}{image.suffix.lower() or '.jpg'}"
+    for stale in directory.glob(f"{appid}.*"):
+        if stale != target:
+            stale.unlink()
+    shutil.copy2(image, target)
+    return target
+
+
+def remove_grid_art(appid: int, *, grid: Path | None = None) -> bool:
+    """Delete all custom grid art for *appid* (capsule/p/hero/logo variants)."""
+    directory = grid if grid is not None else grid_dir()
+    if not directory.is_dir():
+        return False
+    removed = False
+    for path in directory.glob(f"{appid}*.*"):
+        path.unlink()
+        removed = True
+    return removed
 
 
 def remove_shortcut(name: str, *, vdf_path: Path | None = None) -> int | None:

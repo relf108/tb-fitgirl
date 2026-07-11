@@ -25,9 +25,18 @@ JSON-lines stdio bridge (`src/tb_fitgirl/bridge.py`):
 - Auto-set the Proton version on the shortcut so the "set Proton in Steam"
   step disappears (write the compat-tool mapping in `config.vdf`; same
   "Steam must be closed" constraint as shortcuts).
+- [x] Fetch a real game icon for the Steam shortcut and .desktop entry
+      (Steam storefront lookup, cached under `~/.tb-fitgirl/icons/`;
+      search-result thumbnails + library icons in the GUI).
+
+### Nice-to-have (later, continued)
+
 - Per-repack component selection UI for `--gui` installs (currently we take
   all defaults silently).
-- Fetch a real game icon for the Steam shortcut and .desktop entry.
+- Backfill icons for games installed before icon support: `add_shortcut` is
+  idempotent and won't update an existing entry, so the shortcut must be
+  removed and re-added (or add an update path).
+- CLI `steam-add`/`install` don't pass icons yet (only the bridge does).
 - Windows/macOS runners for the GUI (bridge protocol is platform-neutral;
   keyring + process-group handling are Linux-specific today).
 
