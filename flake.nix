@@ -104,6 +104,9 @@
             postInstall = ''
               wrapProgram $out/bin/tbfg_gui \
                 --prefix PATH : ${pkgs.lib.makeBinPath [ tb-fitgirl ]}
+
+              install -Dm644 ${self}/gui/linux/tbfg_gui.desktop \
+                $out/share/applications/tbfg_gui.desktop
             '';
 
             meta = {

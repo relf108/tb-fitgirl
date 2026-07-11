@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=tb-fitgirl
+GenericName=FitGirl Repack Installer
+Comment=Find, cache and install FitGirl repacks via TorBox and Proton
+Exec=tbfg_gui
+Icon=tbfg_gui
+Terminal=false
+Type=Application
+Categories=Game;Utility;
+Keywords=fitgirl;repack;torrent;proton;steam;install;
+StartupWMClass=tbfg_gui
