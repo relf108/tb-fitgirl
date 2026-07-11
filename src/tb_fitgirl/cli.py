@@ -15,6 +15,7 @@ from pathlib import Path
 import httpx
 
 from . import steam
+from .desktop import write_desktop_entry
 from .downloader import Downloader
 from .installer import InstallError, find_repack, install, verify_bins
 from .models import Repack, Torrent, TorrentFile, human_size, magnet_hash
@@ -139,8 +140,12 @@ def _print_wait(torrent: Torrent) -> None:
     print(f"  waiting: {state} {torrent.progress:.0%}", end="\r", flush=True)
 
 
-def cmd_download(args: argparse.Namespace) -> int:
-    dest = Path(args.dest).expanduser()
+def _do_download(args: argparse.Namespace, dest: Path) -> Path | None:
+    """Cache (if needed) + download the target into *dest*.
+
+    Returns the top-level directory the files were written into, or None on
+    failure. Shared by the ``download`` and ``install`` commands.
+    """
     with TorboxClient() as tb:
         torrent = _resolve_torrent(tb, args.target)
         if torrent is not None:
@@ -149,11 +154,11 @@ def cmd_download(args: argparse.Namespace) -> int:
             # Explicit ids never fall back to scraping: the digits would be
             # used as a search title and could match something unrelated.
             print(f"Torrent id {args.target} not found in your TorBox account.")
-            return 1
+            return None
         else:
             maybe_id = _add_to_account(tb, args)
             if maybe_id is None:
-                return 1
+                return None
             torrent_id = maybe_id
 
         with Downloader(tb, dest) as dl:
@@ -162,7 +167,16 @@ def cmd_download(args: argparse.Namespace) -> int:
             paths = dl.download_torrent(torrent, on_progress=_print_progress)
 
     print(f"Downloaded {len(paths)} files to {dest.resolve()}")
-    return 0
+    # Files land under dest/<torrent name>/...; return that top dir.
+    tops = {p.relative_to(dest).parts[0] for p in paths if p.is_relative_to(dest)}
+    if len(tops) == 1:
+        return dest / next(iter(tops))
+    return dest
+
+
+def cmd_download(args: argparse.Namespace) -> int:
+    dest = Path(args.dest).expanduser()
+    return 0 if _do_download(args, dest) is not None else 1
 
 
 def _find_repack_dir(target: str, downloads: Path) -> Path | None:
@@ -194,7 +208,7 @@ def _install_progress(done: int, total: int | None, elapsed: float, rate: float)
     print(f"\r{line:<78}", end="", flush=True)
 
 
-def _add_steam_shortcut(name: str, exe: Path, target: str) -> int:
+def _add_steam_shortcut(name: str, exe: Path, target: str, *, app_menu: bool = True) -> int:
     if steam.steam_running():
         print(
             "\nSteam is running; it would overwrite the shortcut on exit.\n"
@@ -206,6 +220,9 @@ def _add_steam_shortcut(name: str, exe: Path, target: str) -> int:
         f"Added to Steam as '{name}' (appid {appid}).\n"
         "Restart Steam, then set Proton in: Properties > Compatibility."
     )
+    if app_menu:
+        entry = write_desktop_entry(name, appid)
+        print(f"Added to application launcher: {entry.name}")
     return appid
 
 
@@ -228,10 +245,23 @@ def cmd_steam_add(args: argparse.Namespace) -> int:
 
 
 def cmd_install(args: argparse.Namespace) -> int:
-    repack_dir = _find_repack_dir(args.target, Path(args.downloads).expanduser())
+    downloads = Path(args.downloads).expanduser()
+    repack_dir = _find_repack_dir(args.target, downloads)
     if repack_dir is None:
-        print(f"No repack directory matching '{args.target}'. Download it first.")
-        return 1
+        if args.no_download:
+            print(f"No repack directory matching '{args.target}' and --no-download set.")
+            return 1
+        if args.target.isdigit():
+            print(f"No downloaded repack matching '{args.target}'.")
+            return 1
+        print(f"'{args.target}' not downloaded yet; fetching from TorBox first...")
+        top = _do_download(args, downloads)
+        if top is None:
+            return 1
+        repack_dir = _find_repack_dir(args.target, downloads)
+        if repack_dir is None:
+            print(f"Downloaded, but no repack directory found under {downloads}.")
+            return 1
 
     repack = find_repack(repack_dir)
     print(
@@ -289,7 +319,7 @@ def cmd_install(args: argparse.Namespace) -> int:
 
     if not args.no_steam:
         try:
-            _add_steam_shortcut(repack.game_name, exe, args.target)
+            _add_steam_shortcut(repack.game_name, exe, args.target, app_menu=not args.no_app_menu)
         except steam.SteamNotFound:
             return 1
     return 0
@@ -341,9 +371,23 @@ def build_parser() -> argparse.ArgumentParser:
     add_source_arg(p_dl)
     p_dl.set_defaults(func=cmd_download)
 
-    p_inst = sub.add_parser("install", help="Install a downloaded repack via Wine + add to Steam")
+    p_inst = sub.add_parser(
+        "install",
+        help="Install a repack (auto-downloads from TorBox first if not present)",
+    )
     p_inst.add_argument("target", help="repack directory path, or name substring under --downloads")
     p_inst.add_argument("--downloads", default="~/TBFGames", help="Where downloads live")
+    p_inst.add_argument(
+        "--no-download",
+        action="store_true",
+        help="Fail instead of downloading if the repack isn't present locally",
+    )
+    p_inst.add_argument(
+        "--wait",
+        type=float,
+        default=900,
+        help="Max seconds to wait for TorBox to fetch an uncached torrent (when downloading)",
+    )
     p_inst.add_argument("--no-verify", action="store_true", help="Skip MD5 verification")
     p_inst.add_argument(
         "--runtime",
@@ -366,6 +410,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Don't wrap Proton in steam-run (only relevant on NixOS)",
     )
     p_inst.add_argument("--no-steam", action="store_true", help="Don't add a Steam shortcut")
+    p_inst.add_argument(
+        "--no-app-menu",
+        action="store_true",
+        help="Don't add a .desktop entry to the application launcher",
+    )
+    add_source_arg(p_inst)
     p_inst.set_defaults(func=cmd_install)
 
     p_steam = sub.add_parser(
