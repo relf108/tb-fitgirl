@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../bridge.dart';
 import '../models.dart';
 import 'install_screen.dart';
+import 'library_screen.dart';
 import 'settings_screen.dart';
 
 /// Search a repack source, show TorBox cache status, and launch installs.
@@ -170,6 +171,13 @@ class _HomeScreenState extends State<HomeScreen> {
       appBar: AppBar(
         title: const Text('tb-fitgirl'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.videogame_asset),
+            tooltip: 'Library',
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute<void>(builder: (_) => const LibraryScreen()),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.settings),
             tooltip: 'Settings',

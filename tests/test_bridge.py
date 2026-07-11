@@ -445,6 +445,64 @@ def test_install_no_download_missing(tmp_path, monkeypatch, capsys):
     assert "downloads disabled" in events_of(events, "error")[0]["data"]["message"]
 
 
+def _prep_library(tmp_path, monkeypatch):
+    """Fake Steam library + shortcuts.vdf + launcher entries in tmp_path."""
+    from tb_fitgirl import steam
+    from tb_fitgirl.desktop import write_desktop_entry
+
+    common = _fake_steam_library(tmp_path, monkeypatch)
+    vdf = tmp_path / "shortcuts.vdf"
+    monkeypatch.setattr(steam, "shortcuts_vdf", lambda: vdf)
+    apps_dir = tmp_path / "applications"
+    monkeypatch.setattr("tb_fitgirl.bridge.APPLICATIONS_DIR", str(apps_dir))
+
+    # Our install: shortcut into common + launcher entry + files on disk.
+    game = common / "DELTARUNE"
+    game.mkdir()
+    exe = game / "DELTARUNE.exe"
+    exe.write_bytes(b"MZ")
+    appid = steam.add_shortcut("DELTARUNE", exe, vdf_path=vdf)
+    write_desktop_entry("DELTARUNE", appid, applications_dir=apps_dir)
+
+    # A user-made non-Steam shortcut outside common: must never be listed.
+    steam.add_shortcut("My Emulator", tmp_path / "emu" / "emu.exe", vdf_path=vdf)
+
+    # Launcher-entry-only game (installed while Steam was running), no files.
+    write_desktop_entry("GHOSTGAME", 123456, applications_dir=apps_dir)
+    return common, appid
+
+
+def test_library_lists_only_our_games(tmp_path, monkeypatch, capsys):
+    common, appid = _prep_library(tmp_path, monkeypatch)
+    events = run_bridge([{"id": 1, "op": "library"}], monkeypatch, capsys)
+    data = events_of(events, "result")[0]["data"]
+    names = [g["name"] for g in data["games"]]
+    assert names == ["DELTARUNE", "GHOSTGAME"]  # sorted; emulator excluded
+
+    delta = data["games"][0]
+    assert delta["steam_shortcut"] is True
+    assert delta["launcher_entry"] is True
+    assert delta["installed"] is True
+    assert delta["appid"] == appid
+    assert delta["path"] == str(common / "DELTARUNE")
+
+    ghost = data["games"][1]
+    assert ghost["steam_shortcut"] is False
+    assert ghost["launcher_entry"] is True
+    assert ghost["installed"] is False
+    assert data["steam_running"] is False
+
+
+def test_library_empty(tmp_path, monkeypatch, capsys):
+    from tb_fitgirl import steam
+
+    _fake_steam_library(tmp_path, monkeypatch)
+    monkeypatch.setattr(steam, "shortcuts_vdf", lambda: tmp_path / "shortcuts.vdf")
+    monkeypatch.setattr("tb_fitgirl.bridge.APPLICATIONS_DIR", str(tmp_path / "applications"))
+    events = run_bridge([{"id": 1, "op": "library"}], monkeypatch, capsys)
+    assert events_of(events, "result")[0]["data"]["games"] == []
+
+
 def test_sequential_requests_keep_ids(tmp_path, monkeypatch, capsys):
     from tb_fitgirl import steam
 

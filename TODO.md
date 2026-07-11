@@ -16,11 +16,12 @@ JSON-lines stdio bridge (`src/tb_fitgirl/bridge.py`):
       manual steps (close Steam first; set Proton version after) are
       surfaced in the confirm dialog and the results screen.
 
+- [x] Library view of installed games (union of our Steam shortcuts and
+      `tb-fitgirl-*.desktop` entries; regular Steam games can never appear)
+      with per-game uninstall incl. optional file deletion.
+
 ### Nice-to-have (later)
 
-- Library view of installed games (read Steam shortcuts + our launcher
-  entries) with uninstall buttons. (The bridge already exposes `uninstall`;
-  needs a "list installed" op + a screen.)
 - Auto-set the Proton version on the shortcut so the "set Proton in Steam"
   step disappears (write the compat-tool mapping in `config.vdf`; same
   "Steam must be closed" constraint as shortcuts).

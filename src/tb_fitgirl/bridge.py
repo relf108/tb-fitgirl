@@ -33,7 +33,7 @@ import httpx
 
 from . import steam
 from .cli import _find_game_exe, _find_installed_dir, _find_repack_dir, _resolve_torrent
-from .desktop import remove_desktop_entry, write_desktop_entry
+from .desktop import APPLICATIONS_DIR, remove_desktop_entry, write_desktop_entry
 from .downloader import Downloader
 from .installer import InstallError, find_repack, install, verify_bins
 from .models import Torrent, TorrentFile, human_size, magnet_hash
@@ -368,6 +368,73 @@ def op_install(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _desktop_entry_name(path: Path) -> str | None:
+    for line in path.read_text(errors="replace").splitlines():
+        if line.startswith("Name="):
+            return line[len("Name=") :].replace("\\\\", "\\")
+    return None
+
+
+def op_library(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    """Games this tool installed: union of our Steam shortcuts + launcher entries.
+
+    Only non-Steam shortcuts pointing inside steamapps/common (ours) and
+    tb-fitgirl-*.desktop entries are considered, so regular Steam games can
+    never appear here (or be offered for uninstall).
+    """
+    common = steam.common_dir().resolve()
+    games: dict[str, dict[str, Any]] = {}
+
+    try:
+        shortcuts = steam.load_shortcuts(steam.shortcuts_vdf()).get("shortcuts") or {}
+    except steam.SteamNotFound:
+        shortcuts = {}
+    for entry in shortcuts.values():
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("AppName") or "")
+        exe = str(entry.get("Exe") or "").strip('"')
+        if not name or not exe:
+            continue
+        exe_path = Path(exe)
+        if not exe_path.is_absolute() or not exe_path.is_relative_to(common):
+            continue  # a non-Steam shortcut the user made themselves
+        game_dir = common / exe_path.relative_to(common).parts[0]
+        games[name] = {
+            "name": name,
+            "path": str(game_dir),
+            "exe": exe,
+            "appid": entry.get("appid"),
+            "steam_shortcut": True,
+            "launcher_entry": False,
+            "installed": game_dir.is_dir(),
+        }
+
+    apps_dir = Path(APPLICATIONS_DIR).expanduser()
+    for entry_path in sorted(apps_dir.glob("tb-fitgirl-*.desktop")):
+        name = _desktop_entry_name(entry_path)
+        if not name:
+            continue
+        if name in games:
+            games[name]["launcher_entry"] = True
+        else:
+            game_dir = common / name
+            games[name] = {
+                "name": name,
+                "path": str(game_dir),
+                "exe": None,
+                "appid": None,
+                "steam_shortcut": False,
+                "launcher_entry": True,
+                "installed": game_dir.is_dir(),
+            }
+
+    return {
+        "games": sorted(games.values(), key=lambda g: str(g["name"]).lower()),
+        "steam_running": steam.steam_running(),
+    }
+
+
 def op_uninstall(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
     target = str(args.get("target") or "")
     keep_files = bool(args.get("keep_files"))
@@ -413,6 +480,7 @@ OPS: dict[str, Callable[[EmitFn, dict[str, Any]], dict[str, Any]]] = {
     "download": op_download,
     "install": op_install,
     "steam_add": op_steam_add,
+    "library": op_library,
     "uninstall": op_uninstall,
 }
 
