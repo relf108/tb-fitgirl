@@ -9,13 +9,14 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from pathlib import Path
 
 import httpx
 
 from . import steam
-from .desktop import write_desktop_entry
+from .desktop import remove_desktop_entry, write_desktop_entry
 from .downloader import Downloader
 from .installer import InstallError, find_repack, install, verify_bins
 from .models import Repack, Torrent, TorrentFile, human_size, magnet_hash
@@ -244,6 +245,71 @@ def cmd_steam_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _find_installed_dir(target: str) -> Path | None:
+    """Locate an installed game directory under steamapps/common by name."""
+    path = Path(target).expanduser()
+    if path.is_dir() and path.name:
+        return path
+    try:
+        common = steam.common_dir()
+    except steam.SteamNotFound:
+        return None
+    exact = common / target
+    if exact.is_dir():
+        return exact
+    needle = target.lower()
+    return next(
+        (p for p in sorted(common.iterdir()) if p.is_dir() and needle in p.name.lower()),
+        None,
+    )
+
+
+def cmd_uninstall(args: argparse.Namespace) -> int:
+    game_dir = _find_installed_dir(args.target)
+    if game_dir is None:
+        print(f"No installed game matching '{args.target}'.")
+        return 1
+    name = game_dir.name
+
+    # Safety: only ever delete inside a Steam library's steamapps/common.
+    if not args.keep_files:
+        try:
+            common = steam.common_dir().resolve()
+        except steam.SteamNotFound:
+            common = None
+        resolved = game_dir.resolve()
+        if common is None or common not in resolved.parents:
+            print(
+                f"Refusing to delete {resolved}: not inside a Steam steamapps/common. "
+                "Use --keep-files to only remove the shortcuts."
+            )
+            return 1
+
+    if not args.no_steam:
+        if steam.steam_running():
+            print(
+                "Steam is running; it would restore the shortcut on exit.\n"
+                f"Close Steam, then run: tb-fitgirl uninstall '{args.target}'"
+            )
+            return 1
+        appid = steam.remove_shortcut(name)
+        print(
+            f"Removed Steam shortcut for '{name}'."
+            if appid is not None
+            else f"No Steam shortcut found for '{name}'."
+        )
+
+    if remove_desktop_entry(name):
+        print("Removed application launcher entry.")
+
+    if not args.keep_files:
+        shutil.rmtree(game_dir)
+        print(f"Deleted {game_dir}")
+    else:
+        print(f"Kept game files at {game_dir}")
+    return 0
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     downloads = Path(args.downloads).expanduser()
     repack_dir = _find_repack_dir(args.target, downloads)
@@ -423,6 +489,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_steam.add_argument("target", help="installed game dir path, or name under steamapps/common")
     p_steam.set_defaults(func=cmd_steam_add)
+
+    p_uninst = sub.add_parser(
+        "uninstall", help="Remove an installed game: files, Steam shortcut, launcher entry"
+    )
+    p_uninst.add_argument("target", help="installed game dir path, or name under steamapps/common")
+    p_uninst.add_argument(
+        "--keep-files", action="store_true", help="Only remove shortcuts, keep the game files"
+    )
+    p_uninst.add_argument("--no-steam", action="store_true", help="Don't touch the Steam shortcut")
+    p_uninst.set_defaults(func=cmd_uninstall)
 
     return parser
 

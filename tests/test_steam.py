@@ -66,6 +66,30 @@ def test_add_shortcut_appends_and_backs_up(steam_root):
     assert vdf.with_suffix(".vdf.bak").is_file()
 
 
+def test_remove_shortcut(steam_root):
+    vdf = steam.shortcuts_vdf(steam_root)
+    steam.add_shortcut("Game A", Path("/g/a.exe"), vdf_path=vdf)
+    b_appid = steam.add_shortcut("Game B", Path("/g/b.exe"), vdf_path=vdf)
+
+    removed = steam.remove_shortcut("Game B", vdf_path=vdf)
+    assert removed == b_appid
+
+    remaining = steam.load_shortcuts(vdf)["shortcuts"]
+    assert [e["AppName"] for e in remaining.values()] == ["Game A"]
+    assert list(remaining) == ["0"]  # re-indexed
+    assert vdf.with_suffix(".vdf.bak").is_file()
+
+
+def test_remove_shortcut_missing(steam_root):
+    vdf = steam.shortcuts_vdf(steam_root)
+    steam.add_shortcut("Game A", Path("/g/a.exe"), vdf_path=vdf)
+    assert steam.remove_shortcut("Nope", vdf_path=vdf) is None
+
+
+def test_remove_shortcut_no_file(tmp_path):
+    assert steam.remove_shortcut("X", vdf_path=tmp_path / "none.vdf") is None
+
+
 def test_steam_not_found(tmp_path, monkeypatch):
     monkeypatch.setattr(steam, "STEAM_ROOTS", (str(tmp_path / "nope"),))
     with pytest.raises(steam.SteamNotFound):

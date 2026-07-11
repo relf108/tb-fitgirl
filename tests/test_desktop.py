@@ -1,4 +1,4 @@
-from tb_fitgirl.desktop import steam_rungameid, write_desktop_entry
+from tb_fitgirl.desktop import remove_desktop_entry, steam_rungameid, write_desktop_entry
 
 
 def test_steam_rungameid():
@@ -33,3 +33,9 @@ def test_write_desktop_entry_sanitises_name(tmp_path):
 def test_write_desktop_entry_custom_icon(tmp_path):
     path = write_desktop_entry("Game", 1, applications_dir=tmp_path, icon="/path/to/icon.png")
     assert "Icon=/path/to/icon.png" in path.read_text()
+
+
+def test_remove_desktop_entry(tmp_path):
+    write_desktop_entry("DELTARUNE", 1, applications_dir=tmp_path)
+    assert remove_desktop_entry("DELTARUNE", applications_dir=tmp_path) is True
+    assert remove_desktop_entry("DELTARUNE", applications_dir=tmp_path) is False  # already gone

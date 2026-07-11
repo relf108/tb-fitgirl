@@ -36,6 +36,10 @@ python -m tb_fitgirl.cli install "pragmata"
 
 # Add an already-installed game to Steam + launcher (no reinstall)
 python -m tb_fitgirl.cli steam-add "pragmata"
+
+# Uninstall: remove game files, Steam shortcut, and launcher entry
+python -m tb_fitgirl.cli uninstall "pragmata"
+python -m tb_fitgirl.cli uninstall "pragmata" --keep-files   # shortcuts only
 ```
 
 After installing, set the Proton version in Steam

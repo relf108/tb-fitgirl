@@ -52,9 +52,22 @@ def write_desktop_entry(
         f"StartupWMClass={_escape(name)}",
         "",
     ]
-    # Sanitise the filename but keep it recognisable.
-    safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name).strip()
-    path = directory / f"tb-fitgirl-{safe}.desktop"
+    path = directory / _desktop_filename(name)
     path.write_text("\n".join(lines))
     path.chmod(0o755)
     return path
+
+
+def _desktop_filename(name: str) -> str:
+    # Sanitise the filename but keep it recognisable.
+    safe = "".join(c if c.isalnum() or c in " -_" else "_" for c in name).strip()
+    return f"tb-fitgirl-{safe}.desktop"
+
+
+def remove_desktop_entry(name: str, *, applications_dir: Path | str = APPLICATIONS_DIR) -> bool:
+    """Remove the launcher entry written for *name*. Returns True if removed."""
+    path = Path(applications_dir).expanduser() / _desktop_filename(name)
+    if path.is_file():
+        path.unlink()
+        return True
+    return False

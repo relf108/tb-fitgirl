@@ -158,3 +158,71 @@ def test_main_reports_missing_key(monkeypatch, capsys):
     )
     assert main(["search", "elden ring"]) == 1
     assert "No API key" in capsys.readouterr().err
+
+
+def _fake_steam_library(tmp_path, monkeypatch):
+    from tb_fitgirl import steam
+
+    common = tmp_path / "Steam" / "steamapps" / "common"
+    common.mkdir(parents=True)
+    monkeypatch.setattr(steam, "common_dir", lambda: common)
+    monkeypatch.setattr(steam, "steam_running", lambda: False)
+    return common
+
+
+def test_uninstall_removes_files_and_shortcuts(tmp_path, monkeypatch, capsys):
+    from tb_fitgirl import steam
+
+    common = _fake_steam_library(tmp_path, monkeypatch)
+    game = common / "DELTARUNE"
+    game.mkdir()
+    (game / "DELTARUNE.exe").write_bytes(b"MZ")
+
+    calls = {}
+
+    def fake_remove_shortcut(name):
+        calls["shortcut"] = name
+        return 123
+
+    def fake_remove_desktop(name):
+        calls["desktop"] = name
+        return True
+
+    monkeypatch.setattr(steam, "remove_shortcut", fake_remove_shortcut)
+    monkeypatch.setattr("tb_fitgirl.cli.remove_desktop_entry", fake_remove_desktop)
+
+    assert main(["uninstall", "deltarune"]) == 0
+    assert not game.exists()
+    assert calls["shortcut"] == "DELTARUNE"
+    assert calls["desktop"] == "DELTARUNE"
+    out = capsys.readouterr().out
+    assert "Deleted" in out
+
+
+def test_uninstall_keep_files(tmp_path, monkeypatch, capsys):
+    from tb_fitgirl import steam
+
+    common = _fake_steam_library(tmp_path, monkeypatch)
+    game = common / "DELTARUNE"
+    game.mkdir()
+    monkeypatch.setattr(steam, "remove_shortcut", lambda name: None)
+    monkeypatch.setattr("tb_fitgirl.cli.remove_desktop_entry", lambda name: False)
+
+    assert main(["uninstall", "deltarune", "--keep-files"]) == 0
+    assert game.exists()  # files kept
+    assert "Kept game files" in capsys.readouterr().out
+
+
+def test_uninstall_not_found(tmp_path, monkeypatch, capsys):
+    _fake_steam_library(tmp_path, monkeypatch)
+    assert main(["uninstall", "nonexistent"]) == 1
+    assert "No installed game" in capsys.readouterr().out
+
+
+def test_uninstall_refuses_outside_steam(tmp_path, monkeypatch, capsys):
+    _fake_steam_library(tmp_path, monkeypatch)
+    outside = tmp_path / "elsewhere" / "Game"
+    outside.mkdir(parents=True)
+    assert main(["uninstall", str(outside)]) == 1
+    assert "Refusing to delete" in capsys.readouterr().out
+    assert outside.exists()

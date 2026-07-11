@@ -280,3 +280,32 @@ def add_shortcut(
         shutil.copy2(vdf_path, vdf_path.with_suffix(".vdf.bak"))
     vdf_path.write_bytes(_write_map(data))
     return appid
+
+
+def remove_shortcut(name: str, *, vdf_path: Path | None = None) -> int | None:
+    """Remove non-Steam shortcut(s) whose AppName matches *name*.
+
+    Returns the appid of a removed entry (or None if none matched). Backs up
+    to shortcuts.vdf.bak first. Re-indexes remaining entries.
+    """
+    vdf_path = vdf_path or shortcuts_vdf()
+    if not vdf_path.is_file():
+        return None
+    data = load_shortcuts(vdf_path)
+    shortcuts: dict[str, Any] = data["shortcuts"]
+
+    kept: list[dict[str, Any]] = []
+    removed_appid: int | None = None
+    for entry in shortcuts.values():
+        if isinstance(entry, dict) and entry.get("AppName") == name:
+            removed_appid = entry.get("appid", removed_appid)
+        else:
+            kept.append(entry)
+
+    if removed_appid is None:
+        return None
+
+    data["shortcuts"] = {str(i): entry for i, entry in enumerate(kept)}
+    shutil.copy2(vdf_path, vdf_path.with_suffix(".vdf.bak"))
+    vdf_path.write_bytes(_write_map(data))
+    return removed_appid
