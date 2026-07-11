@@ -84,7 +84,8 @@
             version = "0.1.0";
             src = "${self}/gui";
 
-            pubspecLockFile = "${self}/gui/pubspec.lock";
+            # autoPubspecLock reads pubspec.lock via IFD (fine outside nixpkgs).
+            autoPubspecLock = "${self}/gui/pubspec.lock";
             # Obtain the real hash by running `nix build .#tb-fitgirl-gui` and
             # replacing this placeholder with the value from the error message.
             vendorHash = pkgs.lib.fakeHash;
