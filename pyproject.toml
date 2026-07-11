@@ -1,7 +1,7 @@
 [project]
 name = "tb-fitgirl"
 version = "0.1.0"
-description = "Search TorBox for cached FitGirl repacks, cache uncached ones from fitgirl-repacks.site"
+description = "Find, cache (TorBox), download and install FitGirl repacks on Linux via Proton"
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.27",

@@ -230,7 +230,6 @@ def install(
     silent: bool = True,
     mute: bool = True,
     ready_when: Callable[[Path], bool] | None = None,
-    extra_args: list[str] | None = None,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     on_progress: InstallProgressFn | None = None,
     poll_interval: float = 1.0,
@@ -254,8 +253,6 @@ def install(
         # the unpack thread deadlocks (observed hanging at the first big file).
         setup_args += ["/SILENT", "/NORESTART", "/SP-"]
     setup_args.append(f"/DIR={_to_wine_path(target_dir)}")
-    if extra_args:
-        setup_args += extra_args
 
     prefix = Path(wine_prefix).expanduser()
     if runtime == "proton":

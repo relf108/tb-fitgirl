@@ -1,39 +1,54 @@
 # tb-fitgirl
 
-Scrape repack sites ([fitgirl-repacks.site](https://fitgirl-repacks.site) by
-default) for repacks, check whether they're cached on TorBox, and cache the
-ones that aren't.
+Find FitGirl repacks, cache them on [TorBox](https://torbox.app), download,
+and install them on Linux via Proton — added to both Steam and your
+application launcher.
+
+Sources are pluggable ([fitgirl-repacks.site](https://fitgirl-repacks.site)
+by default).
 
 ## Setup
 
-Requires nix + direnv.
+Requires nix + direnv, and a Steam install with at least one Proton runtime.
 
 ```sh
-direnv allow                       # builds dev shell (Python 3.14 + deps)
-echo 'TORBOX_API_KEY=<your-key>' > .env   # key from https://torbox.app/settings
+direnv allow                              # dev shell (Python 3.14 + deps)
+echo 'TORBOX_API_KEY=<your-key>' > .env   # key from torbox.app/settings
 ```
 
 ## Usage
 
 ```sh
-# Scrape fitgirl-repacks.site, show TorBox cache status per repack
-python -m tb_fitgirl.cli search "pragmata" [--limit N]
+# Search a repack source and show TorBox cache status
+python -m tb_fitgirl.cli search "pragmata" [--limit N] [--source fitgirl]
 
-# Cache in TorBox: scrapes magnet by title (or takes a magnet URI directly),
-# reports cache status, then adds it to your account
+# Cache a repack on TorBox (scrapes the magnet by title, or takes a magnet URI)
 python -m tb_fitgirl.cli cache "pragmata"
-python -m tb_fitgirl.cli cache "magnet:?xt=urn:btih:..."
+python -m tb_fitgirl.cli cache "magnet:?xt=urn:btih:..." [--only-if-cached]
 
-# Never start an uncached (real) download; only add if already cached
-python -m tb_fitgirl.cli cache "pragmata" --only-if-cached
-
-# Pick a different repack source (see: Adding a scraper)
-python -m tb_fitgirl.cli search "pragmata" --source fitgirl
-
-# Download a torrent from your TorBox account (id, hash/magnet, or name substring)
-python -m tb_fitgirl.cli download "pragmata"            # to ~/TBFGames
+# Download from your TorBox account (auto-caches first if needed)
+python -m tb_fitgirl.cli download "pragmata"            # -> ~/TBFGames
 python -m tb_fitgirl.cli download "pragmata" --dest /mnt/games
+
+# Install: auto-downloads if not present, unpacks via Proton, adds to Steam
+# and the app launcher. Close Steam first (it rewrites shortcuts on exit).
+python -m tb_fitgirl.cli install "pragmata"
+
+# Add an already-installed game to Steam + launcher (no reinstall)
+python -m tb_fitgirl.cli steam-add "pragmata"
 ```
+
+After installing, set the Proton version in Steam
+(Properties > Compatibility) — non-Steam shortcuts don't inherit a default.
+
+### Useful install flags
+
+- `--no-download` — fail instead of downloading if not present locally
+- `--runtime {proton,wine}` / `--proton NAME` — runtime selection
+  (Proton is the reliable default; raw Wine hangs on FitGirl's unpacker)
+- `--gui` — run the installer UI instead of silent
+- `--no-steam` / `--no-app-menu` — skip the respective shortcut
+- `--no-verify` — skip MD5 verification
 
 ## Adding a scraper
 
@@ -46,18 +61,20 @@ It's then available via `--source <name>`.
 ## Development
 
 ```sh
-ruff check src tests && ruff format --check src tests   # QA
-pytest                                                  # tests (HTTP mocked)
+make qa      # ruff check + format --check
+make test    # pytest (HTTP mocked)
+make check   # both
 ```
 
-## API notes
+## Notes
 
-- `https://api.torbox.app/v1/api` — `checkcached` (300/min), `createtorrent`
-- Auth: `Authorization: Bearer $TORBOX_API_KEY`
-- `createtorrent` success does NOT say whether the item was cached; use
-  `checkcached` first or pass `add_only_if_cached` (fails with
-  `DOWNLOAD_NOT_CACHED` when uncached)
-- Uncached `createtorrent` calls are limited to 60/hour; cached ones only
-  count against the 300/min pool
-- `https://search-api.torbox.app` is NOT used: it returns
-  `429 "0 per 1 minute"` (plan-gated to zero) on this account's plan
+- **TorBox**: `createtorrent` success doesn't indicate cache state; we
+  `checkcached` first. Uncached adds are limited to 60/hour. The
+  `search-api.torbox.app` endpoint is plan-gated to zero on this account,
+  so repacks are found by scraping instead.
+- **Install runtime**: FitGirl's srep/lolz/precomp unpacker is Windows-only,
+  so a Wine/Proton runtime is required — there's no native Linux unpack.
+  Proton + the Steam Linux Runtime is used; on NixOS it's wrapped in
+  `steam-run` automatically (no-op elsewhere). Silent installs use `/SILENT`
+  (not `/VERYSILENT`, which deadlocks the unpacker) and stop once the game
+  exe appears, skipping FitGirl's Proton-irrelevant finalisation step.
