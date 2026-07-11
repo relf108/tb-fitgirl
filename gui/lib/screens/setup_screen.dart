@@ -44,9 +44,7 @@ class _SetupScreenState extends State<SetupScreen> {
       if (!mounted) return;
       setState(() => _account = account);
       if (!stored) {
-        _showSnack(
-          'Keyring unavailable (secret-tool missing?): key kept for this session only.',
-        );
+        _showSnack('Could not save API key — please try again.');
       }
       widget.onSaved(key);
     } on BridgeException catch (err) {
