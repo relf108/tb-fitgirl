@@ -127,3 +127,4 @@ make check   # both
   `steam-run` automatically (no-op elsewhere). Silent installs use `/SILENT`
   (not `/VERYSILENT`, which deadlocks the unpacker) and stop once the game
   exe appears, skipping FitGirl's Proton-irrelevant finalisation step.
+# tb-fitgirl
