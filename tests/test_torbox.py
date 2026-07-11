@@ -18,6 +18,36 @@ def test_requires_api_key(monkeypatch):
 
 
 @respx.mock
+def test_me(client):
+    respx.get(f"{MAIN_API}/user/me").mock(
+        return_value=Response(
+            200,
+            json={
+                "success": True,
+                "data": {"email": "a@b.c", "plan": 2, "premium_expires_at": "2027-01-01"},
+            },
+        )
+    )
+    data = client.me()
+    assert data["email"] == "a@b.c"
+    assert data["plan"] == 2
+
+
+@respx.mock
+def test_me_bad_key(client):
+    respx.get(f"{MAIN_API}/user/me").mock(return_value=Response(403, json={}))
+    with pytest.raises(TorboxError, match="Authentication"):
+        client.me()
+
+
+@respx.mock
+def test_me_unexpected_payload(client):
+    respx.get(f"{MAIN_API}/user/me").mock(return_value=Response(200, json={"data": []}))
+    with pytest.raises(TorboxError, match="Unexpected"):
+        client.me()
+
+
+@respx.mock
 def test_check_cached(client):
     route = respx.get(f"{MAIN_API}/torrents/checkcached").mock(
         return_value=Response(

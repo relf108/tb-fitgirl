@@ -1,0 +1,15 @@
+# No flutter_lints include: that would be a hosted package. The built-in
+# core analyzer rules below cover the essentials.
+analyzer:
+  language:
+    strict-casts: true
+    strict-inference: true
+
+linter:
+  rules:
+    - always_declare_return_types
+    - avoid_print
+    - prefer_const_constructors
+    - prefer_final_locals
+    - unawaited_futures
+    - use_build_context_synchronously

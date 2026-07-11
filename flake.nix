@@ -26,6 +26,15 @@
             packages = [
               pythonEnv
               pkgs.ruff
+              # Flutter GUI (gui/): SDK + Linux desktop build deps
+              pkgs.flutter
+              pkgs.cmake
+              pkgs.ninja
+              pkgs.clang
+              pkgs.pkg-config
+            ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+              pkgs.gtk3
+              pkgs.libsecret # secret-tool, used by the GUI for API key storage
             ];
             shellHook = ''
               export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"

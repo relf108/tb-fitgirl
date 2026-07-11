@@ -78,6 +78,18 @@ class TorboxClient:
 
     # -- endpoints ----------------------------------------------------------
 
+    def me(self) -> dict[str, Any]:
+        """Account details for the key's owner (also serves as key validation).
+
+        Returns the raw ``data`` object from ``GET /user/me`` (plan, email,
+        premium_expires_at, ...). Raises TorboxError on a bad key.
+        """
+        payload = self._request("GET", f"{MAIN_API}/user/me")
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            raise TorboxError("Unexpected response from /user/me.")
+        return data
+
     def check_cached(self, hashes: list[str]) -> dict[str, CacheStatus]:
         """Return {hash: CacheStatus} for the given info-hashes."""
         if not hashes:

@@ -54,6 +54,32 @@ After installing, set the Proton version in Steam
 - `--no-steam` / `--no-app-menu` — skip the respective shortcut
 - `--no-verify` — skip MD5 verification
 
+## GUI (Flutter)
+
+A Flutter desktop front-end lives in `gui/`, wrapping the same pipeline via
+a JSON-lines stdio bridge (`python -m tb_fitgirl.bridge`). All TorBox/Proton
+logic stays in Python; Flutter is presentation only.
+
+```sh
+make gui-run     # generate the Linux runner (one-off) + flutter run
+make gui-test    # flutter analyze + widget tests
+make gui-build   # release build -> gui/build/linux/.../tbfg_gui
+```
+
+- On first run it prompts for your TorBox API key, validates it, and stores
+  it in the OS keyring via `secret-tool` (never a file). `TORBOX_API_KEY`
+  in the environment works as a read-only fallback.
+- The GUI finds the Python back end by looking for `src/tb_fitgirl/bridge.py`
+  upward from the working directory; set `TBFG_BACKEND=/path/to/checkout`
+  (and optionally `TBFG_PYTHON`) when running the built binary elsewhere.
+- All direct dependencies are SDK-provided (no explicit hosted packages);
+  the first `pub get` only resolves Flutter's own pinned deps.
+
+The bridge protocol (for other front-ends): one JSON request per line on
+stdin (`{"id", "op", "args"}`), progress/result/error events per line on
+stdout with `data: {phase, done, total, rate, message}` progress payloads.
+Cancellation = kill the bridge's process group.
+
 ## Adding a scraper
 
 1. Subclass `tb_fitgirl.scrapers.base.Scraper`; implement `search()` and

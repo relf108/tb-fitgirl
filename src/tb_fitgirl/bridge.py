@@ -1,0 +1,510 @@
+"""JSON-lines stdio bridge: the back-end boundary for GUI front-ends.
+
+A front-end (see gui/) spawns ``python -m tb_fitgirl.bridge``, writes one
+JSON request per line on stdin, and reads JSON events on stdout:
+
+    request : {"id": 1, "op": "search", "args": {"title": "pragmata"}}
+    progress: {"id": 1, "event": "progress",
+               "data": {"phase": "download", "done": 0, "total": 0,
+                        "rate": 0.0, "message": "setup.exe"}}
+    result  : {"id": 1, "event": "result", "data": {...}}
+    error   : {"id": 1, "event": "error", "data": {"message": "...", "code": null}}
+
+Requests are handled one at a time, in order. Long-running operations are
+cancelled by killing the bridge process (front-ends run one bridge per
+operation), so there is no in-band cancel.
+
+All ops accept an optional ``api_key`` arg; TORBOX_API_KEY is the fallback.
+Flutter (or any other front-end) is presentation only: every piece of
+TorBox/Proton logic stays in the library modules this bridge drives.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import sys
+import time
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+import httpx
+
+from . import steam
+from .cli import _find_game_exe, _find_installed_dir, _find_repack_dir, _resolve_torrent
+from .desktop import remove_desktop_entry, write_desktop_entry
+from .downloader import Downloader
+from .installer import InstallError, find_repack, install, verify_bins
+from .models import Torrent, TorrentFile, human_size, magnet_hash
+from .scrapers import DEFAULT_SCRAPER, SCRAPERS, get_scraper
+from .torbox import TorboxClient, TorboxError
+
+# on_event(phase, done, total, rate, message)
+EmitFn = Callable[..., None]
+
+PLAN_NAMES = {0: "Free", 1: "Essential", 2: "Pro", 3: "Standard"}
+
+PROGRESS_INTERVAL = 0.1  # min seconds between progress events per phase
+
+
+class BridgeError(RuntimeError):
+    """An operation-level failure to report to the front-end."""
+
+
+def _write(obj: dict[str, Any]) -> None:
+    print(json.dumps(obj), flush=True)
+
+
+class _Throttle:
+    """Rate-limit progress events so per-chunk callbacks don't flood stdout."""
+
+    def __init__(self, interval: float = PROGRESS_INTERVAL):
+        self._interval = interval
+        self._last = 0.0
+
+    def ready(self, *, final: bool = False) -> bool:
+        now = time.monotonic()
+        if final or now - self._last >= self._interval:
+            self._last = now
+            return True
+        return False
+
+
+class _RateMeter:
+    """Bytes/sec over the window since the last sample."""
+
+    def __init__(self) -> None:
+        self._t = time.monotonic()
+        self._done = 0
+
+    def sample(self, done: int) -> float:
+        now = time.monotonic()
+        delta_t, delta_b = now - self._t, done - self._done
+        self._t, self._done = now, done
+        return delta_b / delta_t if delta_t > 0 and delta_b >= 0 else 0.0
+
+
+# -- op helpers --------------------------------------------------------------
+
+
+def _client(args: dict[str, Any]) -> TorboxClient:
+    return TorboxClient(api_key=args.get("api_key") or None)
+
+
+def _resolve_or_add(tb: TorboxClient, emit: EmitFn, target: str, source: str) -> int:
+    """Find *target* in the account, scraping + adding it if needed."""
+    torrent = _resolve_torrent(tb, target)
+    if torrent is not None:
+        return torrent.id
+    if target.isdigit():
+        raise BridgeError(f"Torrent id {target} not found in your TorBox account.")
+    magnet = target
+    if not magnet.startswith("magnet:"):
+        emit(phase="scrape", message=f"Searching {source} for '{target}'...")
+        with get_scraper(source) as scraper:
+            repack = scraper.find_repack(target)
+        if repack is None or repack.primary_magnet is None:
+            raise BridgeError(f"No magnet found for '{target}' via '{source}'.")
+        emit(phase="scrape", message=f"Found: {repack.title}")
+        magnet = repack.primary_magnet
+    infohash = magnet_hash(magnet)
+    if infohash and not tb.check_cached([infohash])[infohash].cached:
+        emit(phase="cache", message="Not cached; TorBox is fetching the torrent first.")
+    data = tb.create_torrent(magnet)
+    torrent_id = data.get("torrent_id")
+    if torrent_id is None:
+        raise BridgeError("TorBox did not return a torrent id.")
+    return int(torrent_id)
+
+
+def _download(emit: EmitFn, args: dict[str, Any], dest: Path) -> Path:
+    """Cache (if needed) + download into *dest*; returns the repack's top dir."""
+    target = str(args.get("target") or "")
+    source = args.get("source") or DEFAULT_SCRAPER
+    wait = float(args.get("wait") or 900)
+
+    def on_poll(torrent: Torrent) -> None:
+        emit(
+            phase="cache",
+            done=int(torrent.progress * 100),
+            total=100,
+            message=torrent.download_state or "queued",
+        )
+
+    throttle = _Throttle()
+    meter = _RateMeter()
+
+    def on_progress(file: TorrentFile, done: int, total: int) -> None:
+        if throttle.ready(final=bool(total) and done >= total):
+            emit(
+                phase="download",
+                done=done,
+                total=total,
+                rate=meter.sample(done),
+                message=file.short_name or file.name,
+            )
+
+    with _client(args) as tb:
+        torrent_id = _resolve_or_add(tb, emit, target, source)
+        with Downloader(tb, dest) as dl:
+            torrent = dl.wait_ready(torrent_id, timeout=wait, on_poll=on_poll)
+            emit(
+                phase="download",
+                message=f"{torrent.name} ({torrent.size_human}, {len(torrent.files)} files)",
+            )
+            paths = dl.download_torrent(torrent, on_progress=on_progress)
+
+    tops = {p.relative_to(dest).parts[0] for p in paths if p.is_relative_to(dest)}
+    return dest / next(iter(tops)) if len(tops) == 1 else dest
+
+
+# -- ops ----------------------------------------------------------------------
+
+
+def op_status(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    return {"steam_running": steam.steam_running(), "sources": sorted(SCRAPERS)}
+
+
+def op_validate_key(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    with _client(args) as tb:
+        data = tb.me()
+    plan = data.get("plan")
+    plan_name = PLAN_NAMES.get(plan) if isinstance(plan, int) else None
+    return {
+        "email": data.get("email"),
+        "plan": plan,
+        "plan_name": plan_name or str(plan),
+        "expiry": data.get("premium_expires_at"),
+    }
+
+
+def op_search(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    title = str(args.get("title") or "")
+    limit = int(args.get("limit") or 5)
+    source = args.get("source") or DEFAULT_SCRAPER
+    emit(phase="scrape", message=f"Searching {source}...")
+    with get_scraper(source) as scraper:
+        repacks = scraper.search(title, limit=limit)
+        for repack in repacks:
+            scraper.fetch_magnets(repack)
+    repacks = [r for r in repacks if r.magnets]
+    if not repacks:
+        return {"repacks": []}
+
+    all_hashes = sorted({h for r in repacks for h in r.hashes})
+    emit(phase="cache", message="Checking TorBox cache...")
+    with _client(args) as tb:
+        statuses = tb.check_cached(all_hashes)
+
+    results = []
+    for repack in repacks:
+        cached = next((statuses[h] for h in repack.hashes if statuses[h].cached), None)
+        results.append(
+            {
+                "title": repack.title,
+                "url": repack.url,
+                "magnet": repack.primary_magnet,
+                "cached": cached is not None,
+                "size": cached.size if cached else 0,
+                "size_human": cached.size_human if cached else "",
+                "source": source,
+            }
+        )
+    return {"repacks": results}
+
+
+def op_cache(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    target = str(args.get("target") or "")
+    source = args.get("source") or DEFAULT_SCRAPER
+    magnet = target
+    if not magnet.startswith("magnet:"):
+        with get_scraper(source) as scraper:
+            repack = scraper.find_repack(target)
+        if repack is None or repack.primary_magnet is None:
+            raise BridgeError(f"No magnet found for '{target}' via '{source}'.")
+        magnet = repack.primary_magnet
+    with _client(args) as tb:
+        infohash = magnet_hash(magnet)
+        already = bool(infohash) and tb.check_cached([infohash])[infohash].cached
+        data = tb.create_torrent(magnet, only_if_cached=bool(args.get("only_if_cached")))
+    return {"name": data.get("name") or data.get("hash") or "torrent", "cached": already}
+
+
+def op_download(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    dest = Path(args.get("dest") or "~/TBFGames").expanduser()
+    return {"path": str(_download(emit, args, dest))}
+
+
+def _add_shortcut(name: str, exe: Path, *, app_menu: bool) -> dict[str, Any]:
+    if steam.steam_running():
+        raise BridgeError("Steam is running; close it and retry.")
+    appid = steam.add_shortcut(name, exe)
+    entry = write_desktop_entry(name, appid) if app_menu else None
+    return {"appid": appid, "desktop_entry": entry.name if entry else None}
+
+
+def op_steam_add(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    target = str(args.get("target") or "")
+    game_dir = _find_installed_dir(target)
+    if game_dir is None:
+        raise BridgeError(f"No installed game directory found for '{target}'.")
+    exe = _find_game_exe(game_dir)
+    if exe is None:
+        raise BridgeError(f"No game exe found under {game_dir}.")
+    shortcut = _add_shortcut(game_dir.name, exe, app_menu=not args.get("no_app_menu"))
+    return {"name": game_dir.name, "exe": str(exe), **shortcut}
+
+
+def _short_title(title: str) -> str:
+    """Best-effort game name from a repack post title.
+
+    Post titles carry edition/DLC/build noise ("Game – v1.0 + 2 DLCs
+    [FitGirl Repack]") that local directory names (torrent names) don't
+    share; only the leading game name is common to both.
+    """
+    for sep in ("–", "—", " - ", "[", "(", "+", ","):
+        idx = title.find(sep)
+        if idx > 0:
+            title = title[:idx]
+    return title.strip()
+
+
+def _locate_repack_dir(target: str, downloads: Path) -> Path | None:
+    """`_find_repack_dir`, retried with the de-noised game name."""
+    found = _find_repack_dir(target, downloads)
+    if found is None:
+        short = _short_title(target)
+        if short and short != target:
+            found = _find_repack_dir(short, downloads)
+    return found
+
+
+def op_install(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    target = str(args.get("target") or "")
+    downloads = Path(args.get("downloads") or "~/TBFGames").expanduser()
+
+    repack_dir = _locate_repack_dir(target, downloads)
+    if repack_dir is None:
+        if args.get("no_download"):
+            raise BridgeError(f"No repack directory matching '{target}' (downloads disabled).")
+        # _download reports the directory it wrote into: trust that over a
+        # title match (post titles rarely match torrent dir names exactly).
+        top = _download(emit, args, downloads)
+        if top != downloads and top.is_dir():
+            repack_dir = top
+        else:
+            repack_dir = _locate_repack_dir(target, downloads)
+        if repack_dir is None:
+            raise BridgeError(f"Downloaded, but no repack directory found under {downloads}.")
+
+    repack = find_repack(repack_dir)
+    emit(phase="verify", message=f"Repack: {repack.game_name} ({len(repack.bins)} archives)")
+    if not args.get("no_verify") and repack.md5_file is not None:
+        failures = verify_bins(
+            repack,
+            on_progress=lambda name, ok: emit(
+                phase="verify", message=f"{'ok ' if ok else 'BAD'} {name}"
+            ),
+        )
+        if failures:
+            raise BridgeError("Verification failed: " + ", ".join(failures))
+
+    runtime = args.get("runtime") or "proton"
+    proton_path = None
+    if runtime == "proton":
+        wanted = args.get("proton")
+        proton_path = steam.find_proton(wanted) if wanted else steam.newest_proton()
+        emit(phase="unpack", message=f"Runtime: Proton ({proton_path.parent.name})")
+
+    target_dir = steam.common_dir() / repack.game_name
+    emit(phase="unpack", message=f"Installing to {target_dir}...")
+
+    throttle = _Throttle()
+
+    def on_progress(done: int, total: int | None, elapsed: float, rate: float) -> None:
+        if throttle.ready(final=rate == 0.0):
+            emit(
+                phase="unpack",
+                done=done,
+                total=total or 0,
+                rate=rate,
+                message=f"{human_size(done)} written",
+            )
+
+    install(
+        repack,
+        target_dir,
+        runtime=runtime,
+        proton=proton_path,
+        use_steam_run=not args.get("no_steam_run"),
+        silent=True,
+        mute=True,
+        ready_when=lambda d: _find_game_exe(d) is not None,
+        on_progress=on_progress,
+    )
+
+    exe = _find_game_exe(target_dir)
+    if exe is None:
+        raise BridgeError(f"Installed, but no game exe found under {target_dir}.")
+
+    result: dict[str, Any] = {
+        "name": repack.game_name,
+        "exe": str(exe),
+        "steam_added": False,
+        "appid": None,
+        "manual_steps": ["Set the Proton version in Steam: Properties > Compatibility."],
+    }
+    if not args.get("no_steam"):
+        emit(phase="shortcut", message="Adding Steam + launcher shortcuts...")
+        if steam.steam_running():
+            result["reason"] = "steam_running"
+            result["manual_steps"].insert(
+                0, "Steam is running: close it, then retry adding the shortcut."
+            )
+        else:
+            shortcut = _add_shortcut(repack.game_name, exe, app_menu=not args.get("no_app_menu"))
+            result.update(steam_added=True, **shortcut)
+    return result
+
+
+def op_uninstall(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
+    target = str(args.get("target") or "")
+    keep_files = bool(args.get("keep_files"))
+    game_dir = _find_installed_dir(target)
+    if game_dir is None:
+        raise BridgeError(f"No installed game matching '{target}'.")
+    name = game_dir.name
+
+    if not keep_files:
+        # Safety: only ever delete inside a Steam library's steamapps/common.
+        try:
+            common = steam.common_dir().resolve()
+        except steam.SteamNotFound:
+            common = None
+        if common is None or common not in game_dir.resolve().parents:
+            raise BridgeError(
+                f"Refusing to delete {game_dir.resolve()}: not inside steamapps/common."
+            )
+
+    removed_shortcut = False
+    if not args.get("no_steam"):
+        if steam.steam_running():
+            raise BridgeError("Steam is running; close it and retry.")
+        removed_shortcut = steam.remove_shortcut(name) is not None
+    removed_entry = remove_desktop_entry(name)
+
+    if not keep_files:
+        shutil.rmtree(game_dir)
+    return {
+        "name": name,
+        "path": str(game_dir),
+        "removed_shortcut": removed_shortcut,
+        "removed_entry": removed_entry,
+        "deleted": not keep_files,
+    }
+
+
+OPS: dict[str, Callable[[EmitFn, dict[str, Any]], dict[str, Any]]] = {
+    "status": op_status,
+    "validate_key": op_validate_key,
+    "search": op_search,
+    "cache": op_cache,
+    "download": op_download,
+    "install": op_install,
+    "steam_add": op_steam_add,
+    "uninstall": op_uninstall,
+}
+
+
+def handle_request(req: dict[str, Any]) -> None:
+    req_id = req.get("id")
+    op = req.get("op")
+    args = req.get("args") or {}
+
+    def emit(
+        *, phase: str, done: int = 0, total: int = 0, rate: float = 0.0, message: str = ""
+    ) -> None:
+        _write(
+            {
+                "id": req_id,
+                "event": "progress",
+                "data": {
+                    "phase": phase,
+                    "done": done,
+                    "total": total,
+                    "rate": rate,
+                    "message": message,
+                },
+            }
+        )
+
+    handler = OPS.get(str(op))
+    if handler is None:
+        _write(
+            {
+                "id": req_id,
+                "event": "error",
+                "data": {"message": f"Unknown op: {op!r}", "code": "UNKNOWN_OP"},
+            }
+        )
+        return
+    try:
+        data = handler(emit, args)
+    except TorboxError as err:
+        _write({"id": req_id, "event": "error", "data": {"message": str(err), "code": err.code}})
+    except (BridgeError, InstallError, steam.SteamNotFound, ValueError) as err:
+        _write({"id": req_id, "event": "error", "data": {"message": str(err), "code": None}})
+    except httpx.HTTPError as err:
+        _write(
+            {
+                "id": req_id,
+                "event": "error",
+                "data": {"message": f"HTTP request failed: {err}", "code": "HTTP"},
+            }
+        )
+    else:
+        _write({"id": req_id, "event": "result", "data": data})
+
+
+def main() -> int:
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            req = json.loads(line)
+        except ValueError:
+            _write(
+                {
+                    "id": None,
+                    "event": "error",
+                    "data": {"message": "Invalid JSON request.", "code": "BAD_REQUEST"},
+                }
+            )
+            continue
+        if not isinstance(req, dict):
+            _write(
+                {
+                    "id": None,
+                    "event": "error",
+                    "data": {"message": "Request must be a JSON object.", "code": "BAD_REQUEST"},
+                }
+            )
+            continue
+        handle_request(req)
+    return 0
+
+
+if __name__ == "__main__":
+    # Become a process-group leader so a front-end can cancel by killing the
+    # group (Proton/unpacker children included). Deliberately NOT setsid():
+    # detaching from the session/terminal makes Proton's unpacker hang
+    # (observed stuck in kernel snd_power_wait on the installer's audio).
+    import os
+
+    try:
+        os.setpgid(0, 0)
+    except OSError:
+        pass
+    sys.exit(main())

@@ -1,0 +1,22 @@
+# All direct dependencies are SDK-provided (flutter / flutter_test): no
+# explicit hosted packages.
+# - JSON + process handling come from dart:convert / dart:io
+# - API key storage shells out to secret-tool (libsecret)
+name: tbfg_gui
+description: Flutter front-end for the tb-fitgirl Python back end.
+publish_to: none
+version: 0.1.0
+
+environment:
+  sdk: ^3.5.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+flutter:
+  uses-material-design: true

@@ -1,0 +1,8 @@
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+# `make gui-create` regenerates the Linux runner + IDE boilerplate
+linux/
+.idea/
+*.iml
