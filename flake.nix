@@ -88,10 +88,9 @@
             # sync with pubspec.lock (regenerate with `make update-pubspec-json`).
             # Using fromJSON avoids import-from-derivation, so the package
             # evaluates correctly inside nixos-rebuild and other restricted contexts.
+            # No vendorHash needed: buildFlutterApplication fetches hosted
+            # deps using the per-package sha256 digests in the lock itself.
             pubspecLock = builtins.fromJSON (builtins.readFile "${self}/gui/pubspec.lock.json");
-            # Obtain the real hash by running `nix build .#tb-fitgirl-gui` and
-            # replacing this placeholder with the value from the error message.
-            vendorHash = pkgs.lib.fakeHash;
 
             nativeBuildInputs = with pkgs; [ cmake ninja clang pkg-config makeWrapper ];
             buildInputs = with pkgs; [ gtk3 libsecret ];
