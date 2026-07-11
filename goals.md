@@ -17,11 +17,12 @@
     - Looks in TB for cache
     - No cache? scrape fitgirl-repacks for a download and cache in TB 
 
-2. Downloader - needs POC
+2. Downloader
     - Downloader which pull from TB 
 
 3. Installer - needs POC
     - Auto installer with linux as first class
+    - Installs should install to steam library
     
 ### Flutter FE
 1. Graphical interface wrapping python back end

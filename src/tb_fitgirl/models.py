@@ -22,6 +22,66 @@ class CacheStatus:
 
 
 @dataclass
+class TorrentFile:
+    """A file inside a torrent in the user's TorBox account."""
+
+    id: int
+    name: str  # path within the torrent, e.g. "Game [FitGirl]/setup.exe"
+    size: int = 0
+    short_name: str | None = None
+
+    @property
+    def size_human(self) -> str:
+        return human_size(self.size)
+
+
+@dataclass
+class Torrent:
+    """A torrent in the user's TorBox account (from /torrents/mylist)."""
+
+    id: int
+    hash: str
+    name: str
+    size: int = 0
+    download_state: str = ""
+    download_present: bool = False
+    download_finished: bool = False
+    progress: float = 0.0
+    files: list[TorrentFile] = field(default_factory=list)
+
+    @property
+    def size_human(self) -> str:
+        return human_size(self.size)
+
+    @property
+    def ready(self) -> bool:
+        return self.download_present
+
+    @classmethod
+    def from_api(cls, raw: dict) -> Torrent:
+        files = [
+            TorrentFile(
+                id=int(f.get("id") or 0),
+                name=f.get("name") or "",
+                size=int(f.get("size") or 0),
+                short_name=f.get("short_name"),
+            )
+            for f in raw.get("files") or []
+        ]
+        return cls(
+            id=int(raw.get("id") or 0),
+            hash=(raw.get("hash") or "").lower(),
+            name=raw.get("name") or "",
+            size=int(raw.get("size") or 0),
+            download_state=raw.get("download_state") or "",
+            download_present=bool(raw.get("download_present")),
+            download_finished=bool(raw.get("download_finished")),
+            progress=float(raw.get("progress") or 0),
+            files=files,
+        )
+
+
+@dataclass
 class Repack:
     """A repack post scraped from some source site."""
 

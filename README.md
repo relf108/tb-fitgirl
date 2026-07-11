@@ -29,6 +29,10 @@ python -m tb_fitgirl.cli cache "pragmata" --only-if-cached
 
 # Pick a different repack source (see: Adding a scraper)
 python -m tb_fitgirl.cli search "pragmata" --source fitgirl
+
+# Download a torrent from your TorBox account (id, hash/magnet, or name substring)
+python -m tb_fitgirl.cli download "pragmata"            # to ~/TBFGames
+python -m tb_fitgirl.cli download "pragmata" --dest /mnt/games
 ```
 
 ## Adding a scraper

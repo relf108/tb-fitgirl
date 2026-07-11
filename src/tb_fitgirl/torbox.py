@@ -12,7 +12,7 @@ from typing import Any
 
 import httpx
 
-from .models import CacheStatus
+from .models import CacheStatus, Torrent
 
 MAIN_API = "https://api.torbox.app/v1/api"
 
@@ -101,6 +101,38 @@ class TorboxClient:
             else:
                 statuses[h] = CacheStatus(hash=h, cached=False)
         return statuses
+
+    def my_list(
+        self, *, torrent_id: int | None = None, bypass_cache: bool = False
+    ) -> list[Torrent]:
+        """Torrents in the user's account. ``bypass_cache`` forces fresh state."""
+        params: dict[str, str] = {}
+        if torrent_id is not None:
+            params["id"] = str(torrent_id)
+        if bypass_cache:
+            params["bypass_cache"] = "true"
+        payload = self._request("GET", f"{MAIN_API}/torrents/mylist", params=params)
+        data = payload.get("data") or []
+        if isinstance(data, dict):  # id= returns a single object
+            data = [data]
+        return [Torrent.from_api(raw) for raw in data]
+
+    def request_download_link(self, torrent_id: int, *, file_id: int | None = None) -> str:
+        """Presigned CDN link for a file (or the whole torrent as zip if no file_id).
+
+        Note: this endpoint authenticates via the ``token`` query param.
+        Links are valid to *start* a download for 3 hours.
+        """
+        params: dict[str, str] = {"token": self.api_key, "torrent_id": str(torrent_id)}
+        if file_id is not None:
+            params["file_id"] = str(file_id)
+        else:
+            params["zip_link"] = "true"
+        payload = self._request("GET", f"{MAIN_API}/torrents/requestdl", params=params)
+        link = payload.get("data")
+        if not isinstance(link, str) or not link:
+            raise TorboxError("No download link returned.")
+        return link
 
     def create_torrent(
         self,

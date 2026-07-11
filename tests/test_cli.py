@@ -99,6 +99,55 @@ def test_main_reports_scraper_http_error(monkeypatch, capsys):
     assert "HTTP request failed" in capsys.readouterr().err
 
 
+@respx.mock
+def test_download_auto_adds_missing_torrent(monkeypatch, capsys, tmp_path):
+    monkeypatch.setenv("TORBOX_API_KEY", "test-key")
+    _mock_scrape("pragmata")
+    _mock_checkcached(cached=True)
+
+    torrent_raw = {
+        "id": 42,
+        "hash": HASH,
+        "name": "PRAGMATA [FitGirl Repack]",
+        "size": 5,
+        "download_state": "cached",
+        "download_present": True,
+        "files": [{"id": 0, "name": "PRAGMATA/setup.exe", "size": 5, "short_name": "setup.exe"}],
+    }
+    # First mylist call (resolve): empty. After add: torrent present.
+    respx.get(f"{MAIN_API}/torrents/mylist").mock(
+        side_effect=[
+            Response(200, json={"success": True, "data": []}),
+            Response(200, json={"success": True, "data": [torrent_raw]}),
+        ]
+    )
+    respx.post(f"{MAIN_API}/torrents/createtorrent").mock(
+        return_value=Response(200, json={"success": True, "data": {"torrent_id": 42, "hash": HASH}})
+    )
+    respx.get(f"{MAIN_API}/torrents/requestdl").mock(
+        return_value=Response(200, json={"success": True, "data": "https://cdn.example.com/f0"})
+    )
+    respx.get("https://cdn.example.com/f0").mock(return_value=Response(200, content=b"12345"))
+
+    assert main(["download", "pragmata", "--dest", str(tmp_path)]) == 0
+    out = capsys.readouterr().out
+    assert "scraping 'fitgirl'" in out
+    assert "Cache status: cached" in out
+    assert "Added to TorBox (id 42)" in out
+    assert (tmp_path / "PRAGMATA/setup.exe").read_bytes() == b"12345"
+
+
+@respx.mock
+def test_download_numeric_id_never_scrapes(monkeypatch, capsys):
+    monkeypatch.setenv("TORBOX_API_KEY", "test-key")
+    respx.get(f"{MAIN_API}/torrents/mylist").mock(
+        return_value=Response(200, json={"success": True, "data": []})
+    )
+    # No scrape/createtorrent mocks: any fallback would raise on unmocked routes.
+    assert main(["download", "12345"]) == 1
+    assert "Torrent id 12345 not found" in capsys.readouterr().out
+
+
 def test_main_reports_missing_key(monkeypatch, capsys):
     from tb_fitgirl.models import Repack
 

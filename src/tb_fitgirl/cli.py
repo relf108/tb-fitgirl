@@ -3,16 +3,19 @@
 Commands:
     tb-fitgirl search "<title>"          scrape a repack source + TorBox cache status
     tb-fitgirl cache "<magnet-or-title>" add magnet to TorBox (checks cache first)
+    tb-fitgirl download "<title|id>"     download a torrent from your TorBox account
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 import httpx
 
-from .models import Repack, magnet_hash
+from .downloader import Downloader
+from .models import Repack, Torrent, TorrentFile, magnet_hash
 from .scrapers import DEFAULT_SCRAPER, SCRAPERS, get_scraper
 from .torbox import TorboxClient, TorboxError
 
@@ -81,6 +84,85 @@ def cmd_cache(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_torrent(tb: TorboxClient, target: str) -> Torrent | None:
+    """Find a torrent in the user's account by id, magnet/hash, or name substring."""
+    torrents = tb.my_list()
+    if target.isdigit():
+        wanted_id = int(target)
+        return next((t for t in torrents if t.id == wanted_id), None)
+    infohash = magnet_hash(target) if target.startswith("magnet:") else target.lower()
+    by_hash = next((t for t in torrents if t.hash == infohash), None)
+    if by_hash:
+        return by_hash
+    needle = target.lower()
+    return next((t for t in torrents if needle in t.name.lower()), None)
+
+
+def _print_progress(file: TorrentFile, done: int, total: int) -> None:
+    pct = f"{done / total:5.0%}" if total else f"{done} B"
+    end = "\n" if total and done >= total else "\r"
+    print(f"  {file.short_name or file.name}: {pct}", end=end, flush=True)
+
+
+def _add_to_account(tb: TorboxClient, args: argparse.Namespace) -> int | None:
+    """Scrape (if needed), cache-check, and add the target. Returns torrent id."""
+    magnet = args.target
+    if not magnet.startswith("magnet:"):
+        print(f"Not in your account; scraping '{args.source}' for '{args.target}'...")
+        with get_scraper(args.source) as scraper:
+            repack = scraper.find_repack(args.target)
+        if repack is None or repack.primary_magnet is None:
+            print(f"No magnet found for '{args.target}' via '{args.source}'.")
+            return None
+        print(f"Found: {repack.title}")
+        magnet = repack.primary_magnet
+
+    infohash = magnet_hash(magnet)
+    if infohash:
+        status = tb.check_cached([infohash])[infohash]
+        print(f"Cache status: {'cached' if status.cached else 'not cached'}")
+        if not status.cached:
+            print("TorBox will torrent it first; this can take a while.")
+    data = tb.create_torrent(magnet)
+    torrent_id = data.get("torrent_id")
+    if torrent_id is None:
+        print("TorBox did not return a torrent id.")
+        return None
+    print(f"Added to TorBox (id {torrent_id}).")
+    return int(torrent_id)
+
+
+def _print_wait(torrent: Torrent) -> None:
+    state = torrent.download_state or "queued"
+    print(f"  waiting: {state} {torrent.progress:.0%}", end="\r", flush=True)
+
+
+def cmd_download(args: argparse.Namespace) -> int:
+    dest = Path(args.dest).expanduser()
+    with TorboxClient() as tb:
+        torrent = _resolve_torrent(tb, args.target)
+        if torrent is not None:
+            torrent_id = torrent.id
+        elif args.target.isdigit():
+            # Explicit ids never fall back to scraping: the digits would be
+            # used as a search title and could match something unrelated.
+            print(f"Torrent id {args.target} not found in your TorBox account.")
+            return 1
+        else:
+            maybe_id = _add_to_account(tb, args)
+            if maybe_id is None:
+                return 1
+            torrent_id = maybe_id
+
+        with Downloader(tb, dest) as dl:
+            torrent = dl.wait_ready(torrent_id, timeout=args.wait, on_poll=_print_wait)
+            print(f"{torrent.name} ({torrent.size_human}, {len(torrent.files)} files)")
+            paths = dl.download_torrent(torrent, on_progress=_print_progress)
+
+    print(f"Downloaded {len(paths)} files to {dest.resolve()}")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tb-fitgirl", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -108,6 +190,24 @@ def build_parser() -> argparse.ArgumentParser:
     )
     add_source_arg(p_cache)
     p_cache.set_defaults(func=cmd_cache)
+
+    p_dl = sub.add_parser("download", help="Download a torrent from your TorBox account")
+    p_dl.add_argument(
+        "target",
+        help="torrent id (all digits), magnet/hash, or name substring; "
+        "if absent from your account, non-id targets are scraped and added",
+    )
+    p_dl.add_argument(
+        "--dest", default="~/TBFGames", help="Destination directory (default: ~/TBFGames)"
+    )
+    p_dl.add_argument(
+        "--wait",
+        type=float,
+        default=900,
+        help="Max seconds to wait for TorBox to finish fetching an uncached torrent",
+    )
+    add_source_arg(p_dl)
+    p_dl.set_defaults(func=cmd_download)
 
     return parser
 
