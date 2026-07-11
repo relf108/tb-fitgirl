@@ -93,6 +93,10 @@
             nativeBuildInputs = with pkgs; [ cmake ninja clang pkg-config makeWrapper ];
             buildInputs = with pkgs; [ gtk3 libsecret ];
 
+            # Flutter drives cmake itself via `flutter build linux`; the
+            # standard cmake setup hook must not pre-empt it.
+            dontUseCmakeConfigure = true;
+
             # Put tb-fitgirl-bridge on PATH so the GUI can spawn it via stdio.
             postInstall = ''
               wrapProgram $out/bin/tbfg_gui \
