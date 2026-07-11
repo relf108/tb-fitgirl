@@ -20,7 +20,7 @@
 2. Downloader
     - Downloader which pull from TB 
 
-3. Installer - needs POC
+3. Installer - needs POC (use delta run which was already downloaded)
     - Auto installer with linux as first class
     - Installs should install to steam library
     

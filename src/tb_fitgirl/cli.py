@@ -14,8 +14,10 @@ from pathlib import Path
 
 import httpx
 
+from . import steam
 from .downloader import Downloader
-from .models import Repack, Torrent, TorrentFile, magnet_hash
+from .installer import InstallError, find_repack, install, verify_bins
+from .models import Repack, Torrent, TorrentFile, human_size, magnet_hash
 from .scrapers import DEFAULT_SCRAPER, SCRAPERS, get_scraper
 from .torbox import TorboxClient, TorboxError
 
@@ -163,6 +165,136 @@ def cmd_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def _find_repack_dir(target: str, downloads: Path) -> Path | None:
+    path = Path(target).expanduser()
+    if path.is_dir():
+        return path
+    if not downloads.is_dir():
+        return None
+    needle = target.lower()
+    candidates = (p for p in sorted(downloads.iterdir()) if p.is_dir())
+    return next((p for p in candidates if needle in p.name.lower()), None)
+
+
+def _find_game_exe(game_dir: Path) -> Path | None:
+    """Best guess at the main game executable after install."""
+    skip = ("unins", "setup", "dxwebsetup", "vcredist", "dotnet", "redist", "crashhandler")
+    exes = [p for p in game_dir.rglob("*.exe") if not any(s in p.name.lower() for s in skip)]
+    return max(exes, key=lambda p: p.stat().st_size, default=None)
+
+
+def _install_progress(done: int, total: int | None, elapsed: float, rate: float) -> None:
+    rate_s = f"{human_size(int(rate))}/s"
+    if total:
+        pct = min(done / total, 1.0)
+        bar = "#" * int(pct * 30)
+        line = f"  [{bar:<30}] {pct:4.0%}  {human_size(done)}/~{human_size(total)}  {rate_s}"
+    else:
+        line = f"  {human_size(done)} written  {rate_s}  {elapsed:.0f}s"
+    print(f"\r{line:<78}", end="", flush=True)
+
+
+def _add_steam_shortcut(name: str, exe: Path, target: str) -> int:
+    if steam.steam_running():
+        print(
+            "\nSteam is running; it would overwrite the shortcut on exit.\n"
+            f"Close Steam, then run: tb-fitgirl steam-add '{target}'"
+        )
+        raise steam.SteamNotFound("Steam is running")
+    appid = steam.add_shortcut(name, exe)
+    print(
+        f"Added to Steam as '{name}' (appid {appid}).\n"
+        "Restart Steam, then set Proton in: Properties > Compatibility."
+    )
+    return appid
+
+
+def cmd_steam_add(args: argparse.Namespace) -> int:
+    game_dir = Path(args.target).expanduser()
+    if not game_dir.is_dir():
+        game_dir = steam.common_dir() / args.target
+    if not game_dir.is_dir():
+        print(f"No installed game directory found for '{args.target}'.")
+        return 1
+    exe = _find_game_exe(game_dir)
+    if exe is None:
+        print(f"No game exe found under {game_dir}.")
+        return 1
+    try:
+        _add_steam_shortcut(game_dir.name, exe, args.target)
+    except steam.SteamNotFound:
+        return 1
+    return 0
+
+
+def cmd_install(args: argparse.Namespace) -> int:
+    repack_dir = _find_repack_dir(args.target, Path(args.downloads).expanduser())
+    if repack_dir is None:
+        print(f"No repack directory matching '{args.target}'. Download it first.")
+        return 1
+
+    repack = find_repack(repack_dir)
+    print(
+        f"Repack: {repack.game_name} ({len(repack.bins)} archives"
+        + (f", {len(repack.optional_bins)} optional" if repack.optional_bins else "")
+        + ")"
+    )
+
+    if not args.no_verify and repack.md5_file is not None:
+        print("Verifying archives...")
+        failures = verify_bins(
+            repack, on_progress=lambda name, ok: print(f"  {'ok ' if ok else 'BAD'} {name}")
+        )
+        if failures:
+            print("Verification failed:\n  " + "\n  ".join(failures))
+            return 1
+
+    proton_path = None
+    if args.runtime == "proton":
+        try:
+            proton_path = steam.find_proton(args.proton) if args.proton else steam.newest_proton()
+        except steam.SteamNotFound as err:
+            print(f"{err}\nUse --runtime wine to fall back to system Wine.")
+            return 1
+        print(f"Runtime: Proton ({proton_path.parent.name})")
+    else:
+        print("Runtime: system Wine")
+
+    target = steam.common_dir() / repack.game_name
+    print(f"Installing to {target} (unpacking; this can take a while)...")
+    progress = None if args.gui else _install_progress
+    # Stop waiting once the game exe is present: FitGirl's finalisation runs
+    # Windows redists that are irrelevant under Proton and can hang for ages.
+    # In --gui mode leave the installer alone so the user drives it.
+    ready_when = None if args.gui else (lambda d: _find_game_exe(d) is not None)
+    install(
+        repack,
+        target,
+        runtime=args.runtime,
+        proton=proton_path,
+        use_steam_run=not args.no_steam_run,
+        silent=not args.gui,
+        mute=not args.no_mute,
+        ready_when=ready_when,
+        on_progress=progress,
+    )
+    if progress is not None:
+        print()  # end the progress line
+
+    exe = _find_game_exe(target)
+    if exe is None:
+        print(f"Installed, but no game exe found under {target}.")
+        return 1
+    print(f"Installed: {exe}")
+
+    if not args.no_steam:
+        try:
+            _add_steam_shortcut(repack.game_name, exe, args.target)
+        except steam.SteamNotFound:
+            return 1
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tb-fitgirl", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -209,6 +341,39 @@ def build_parser() -> argparse.ArgumentParser:
     add_source_arg(p_dl)
     p_dl.set_defaults(func=cmd_download)
 
+    p_inst = sub.add_parser("install", help="Install a downloaded repack via Wine + add to Steam")
+    p_inst.add_argument("target", help="repack directory path, or name substring under --downloads")
+    p_inst.add_argument("--downloads", default="~/TBFGames", help="Where downloads live")
+    p_inst.add_argument("--no-verify", action="store_true", help="Skip MD5 verification")
+    p_inst.add_argument(
+        "--runtime",
+        choices=("proton", "wine"),
+        default="proton",
+        help="Runtime for the installer (default: proton; more reliable for FitGirl unpackers)",
+    )
+    p_inst.add_argument(
+        "--proton",
+        metavar="NAME",
+        help="Proton build name substring (default: newest official Valve Proton)",
+    )
+    p_inst.add_argument("--gui", action="store_true", help="Run installer GUI instead of silent")
+    p_inst.add_argument(
+        "--no-mute", action="store_true", help="Don't silence the installer's music (Wine audio)"
+    )
+    p_inst.add_argument(
+        "--no-steam-run",
+        action="store_true",
+        help="Don't wrap Proton in steam-run (only relevant on NixOS)",
+    )
+    p_inst.add_argument("--no-steam", action="store_true", help="Don't add a Steam shortcut")
+    p_inst.set_defaults(func=cmd_install)
+
+    p_steam = sub.add_parser(
+        "steam-add", help="Add an already-installed game to Steam (no reinstall)"
+    )
+    p_steam.add_argument("target", help="installed game dir path, or name under steamapps/common")
+    p_steam.set_defaults(func=cmd_steam_add)
+
     return parser
 
 
@@ -221,6 +386,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except httpx.HTTPError as err:
         print(f"error: HTTP request failed: {err}", file=sys.stderr)
+        return 1
+    except (InstallError, steam.SteamNotFound) as err:
+        print(f"error: {err}", file=sys.stderr)
         return 1
 
 
