@@ -1,4 +1,5 @@
-/// Client for the Python JSON-lines stdio bridge (`python -m tb_fitgirl.bridge`).
+/// Client for the Python JSON-lines stdio bridge (`tb-fitgirl-bridge` when
+/// installed, or `python -m tb_fitgirl.bridge` in a dev checkout).
 ///
 /// One bridge process is spawned per operation; cancellation kills the whole
 /// process group (Proton/installer children included). All TorBox/Proton
@@ -45,8 +46,36 @@ class BridgeException implements Exception {
   String toString() => message;
 }
 
-/// Locate the repo checkout containing `src/tb_fitgirl/bridge.py`.
-Directory? findBackendDir() {
+/// How to launch the bridge process.
+sealed class _BridgeLaunch {
+  const _BridgeLaunch();
+}
+
+/// Installed Nix/system package: `tb-fitgirl-bridge` is on PATH.
+class _InstalledBridge extends _BridgeLaunch {
+  const _InstalledBridge();
+}
+
+/// Dev checkout: `python3 -m tb_fitgirl.bridge` inside the repo directory.
+class _DevBridge extends _BridgeLaunch {
+  const _DevBridge(this.backendDir);
+  final Directory backendDir;
+}
+
+/// Resolve how to launch the bridge:
+/// 1. `tb-fitgirl-bridge` on PATH (Nix / system install).
+/// 2. Dev checkout discovered via TBFG_BACKEND or proximity to the executable.
+_BridgeLaunch? _resolveBridge() {
+  // Prefer the installed wrapper when it exists on PATH.
+  final pathDirs =
+      (Platform.environment['PATH'] ?? '').split(':').map(Directory.new);
+  for (final dir in pathDirs) {
+    if (File('${dir.path}/tb-fitgirl-bridge').existsSync()) {
+      return const _InstalledBridge();
+    }
+  }
+
+  // Fall back to a dev checkout (useful for `flutter run`).
   final envDir = Platform.environment['TBFG_BACKEND'];
   final candidates = <Directory>[
     if (envDir != null) Directory(envDir),
@@ -56,9 +85,11 @@ Directory? findBackendDir() {
     File(Platform.resolvedExecutable).parent.parent,
   ];
   for (final dir in candidates) {
-    final marker = File('${dir.path}/src/tb_fitgirl/bridge.py');
-    if (marker.existsSync()) return dir;
+    if (File('${dir.path}/src/tb_fitgirl/bridge.py').existsSync()) {
+      return _DevBridge(dir);
+    }
   }
+
   return null;
 }
 
@@ -78,26 +109,37 @@ class BridgeOperation {
     Map<String, dynamic> args, {
     void Function(BridgeProgress progress)? onProgress,
   }) async {
-    final backend = findBackendDir();
-    if (backend == null) {
+    final launch = _resolveBridge();
+    if (launch == null) {
       throw const BridgeException(
-        'Back end not found. Set TBFG_BACKEND to the tb-fitgirl checkout.',
+        'Back end not found. Install tb-fitgirl or set TBFG_BACKEND to the checkout.',
       );
     }
-    final python = Platform.environment['TBFG_PYTHON'] ?? 'python3';
+
     // The bridge makes itself a process-group leader (os.setpgid) so
     // cancel() can kill the whole tree (Proton unpackers included). Do NOT
     // wrap it in setsid: losing the session/terminal makes Proton's
     // unpacker hang (kernel snd_power_wait on the installer's audio).
-    final process = await Process.start(
-      python,
-      ['-m', 'tb_fitgirl.bridge'],
-      workingDirectory: backend.path,
-      environment: {
-        ...Platform.environment,
-        'PYTHONPATH': '${backend.path}/src',
-      },
-    );
+    final Process process;
+    if (launch is _InstalledBridge) {
+      process = await Process.start(
+        'tb-fitgirl-bridge',
+        [],
+        environment: Platform.environment,
+      );
+    } else {
+      final dev = launch as _DevBridge;
+      final python = Platform.environment['TBFG_PYTHON'] ?? 'python3';
+      process = await Process.start(
+        python,
+        ['-m', 'tb_fitgirl.bridge'],
+        workingDirectory: dev.backendDir.path,
+        environment: {
+          ...Platform.environment,
+          'PYTHONPATH': '${dev.backendDir.path}/src',
+        },
+      );
+    }
 
     final completer = Completer<Map<String, dynamic>>();
     final stderrBuf = StringBuffer();
