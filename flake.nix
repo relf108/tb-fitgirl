@@ -84,8 +84,11 @@
             version = "0.1.0";
             src = "${self}/gui";
 
-            # autoPubspecLock reads pubspec.lock via IFD (fine outside nixpkgs).
-            autoPubspecLock = "${self}/gui/pubspec.lock";
+            # pubspec.lock.json is the JSON-serialised pubspec.lock; kept in
+            # sync with pubspec.lock (regenerate with `make update-pubspec-json`).
+            # Using fromJSON avoids import-from-derivation, so the package
+            # evaluates correctly inside nixos-rebuild and other restricted contexts.
+            pubspecLock = builtins.fromJSON (builtins.readFile "${self}/gui/pubspec.lock.json");
             # Obtain the real hash by running `nix build .#tb-fitgirl-gui` and
             # replacing this placeholder with the value from the error message.
             vendorHash = pkgs.lib.fakeHash;
