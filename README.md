@@ -16,6 +16,25 @@ direnv allow                              # dev shell (Python 3.14 + deps)
 echo 'TORBOX_API_KEY=<your-key>' > .env   # key from torbox.app/settings
 ```
 
+### Installing on NixOS
+
+The flake exposes the CLI (and `tb-fitgirl-bridge`, the GUI's back end) as
+an installable package. In your NixOS config flake:
+
+```nix
+inputs.tb-fitgirl.url = "git+file:///home/you/Projects/tb-fitgirl";
+# or github:you/tb-fitgirl once pushed
+
+# in your system configuration:
+environment.systemPackages = [
+  inputs.tb-fitgirl.packages.${pkgs.system}.default
+];
+```
+
+Set `TORBOX_API_KEY` in the environment (or pass `api_key` per bridge
+request). Runtime expectations: a Steam install with a Proton runtime, and
+on NixOS `steam-run` on PATH (it's picked up automatically when present).
+
 ## Usage
 
 ```sh
