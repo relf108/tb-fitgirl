@@ -211,9 +211,9 @@ def _fake_steam(tmp_path, monkeypatch, *, with_runtime=False):
     proton.write_text("#!/usr/bin/env python3\n")
     if with_runtime:
         (proton_dir / "toolmanifest.vdf").write_text('"manifest"{"require_tool_appid" "4183110"}')
-        sniper = root / "steamapps" / "common" / "SteamLinuxRuntime_sniper"
-        sniper.mkdir()
-        (sniper / "_v2-entry-point").write_text("#!/bin/sh\n")
+        runtime = root / "steamapps" / "common" / "SteamLinuxRuntime_4"
+        runtime.mkdir()
+        (runtime / "_v2-entry-point").write_text("#!/bin/sh\n")
     return root, proton
 
 
@@ -247,7 +247,7 @@ def test_install_via_proton_builds_command(repack_dir, tmp_path, monkeypatch):
 
 def test_install_proton_wraps_in_runtime_container(repack_dir, tmp_path, monkeypatch):
     root, proton = _fake_steam(tmp_path, monkeypatch, with_runtime=True)
-    entry = root / "steamapps" / "common" / "SteamLinuxRuntime_sniper" / "_v2-entry-point"
+    entry = root / "steamapps" / "common" / "SteamLinuxRuntime_4" / "_v2-entry-point"
 
     captured = {}
 

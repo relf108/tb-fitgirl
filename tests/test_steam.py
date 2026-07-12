@@ -185,3 +185,54 @@ def test_find_proton_missing(steam_root):
 def test_newest_proton_none(steam_root):
     with pytest.raises(steam.SteamNotFound):
         steam.newest_proton(steam_root)
+
+
+def _make_runtime(root, name):
+    d = root / "steamapps" / "common" / name
+    d.mkdir(parents=True, exist_ok=True)
+    entry = d / "_v2-entry-point"
+    entry.write_text("#!/bin/sh\n")
+    return entry
+
+
+def _make_proton_requiring(root, appid):
+    proton = _make_proton(root, "Proton 11.0")
+    (proton.parent / "toolmanifest.vdf").write_text(
+        f'"manifest"\n{{\n\t"require_tool_appid"\t"{appid}"\n}}\n'
+    )
+    return proton
+
+
+def test_runtime_entry_point_uses_appmanifest_installdir(steam_root):
+    """Steam's appmanifest is authoritative, even for appids we don't know."""
+    proton = _make_proton_requiring(steam_root, "9999999")
+    entry = _make_runtime(steam_root, "SteamLinuxRuntime_9")
+    _make_runtime(steam_root, "SteamLinuxRuntime_sniper")  # decoy fallback
+    (steam_root / "steamapps" / "appmanifest_9999999.acf").write_text(
+        '"AppState"\n{\n\t"appid"\t\t"9999999"\n\t"installdir"\t\t"SteamLinuxRuntime_9"\n}\n'
+    )
+    assert steam.runtime_entry_point(proton, steam_root) == entry
+
+
+def test_runtime_entry_point_known_appid_map(steam_root):
+    """Without an appmanifest, 4183110 must resolve to runtime 4, not sniper.
+
+    Regression test: the sniper container's gnutls is too old for Proton 11's
+    wine, which broke all HTTPS (installer 'downloading additional files').
+    """
+    proton = _make_proton_requiring(steam_root, "4183110")
+    entry = _make_runtime(steam_root, "SteamLinuxRuntime_4")
+    _make_runtime(steam_root, "SteamLinuxRuntime_sniper")
+    assert steam.runtime_entry_point(proton, steam_root) == entry
+
+
+def test_runtime_entry_point_unknown_appid_prefers_newest(steam_root):
+    proton = _make_proton_requiring(steam_root, "8888888")
+    _make_runtime(steam_root, "SteamLinuxRuntime_soldier")
+    sniper = _make_runtime(steam_root, "SteamLinuxRuntime_sniper")
+    assert steam.runtime_entry_point(proton, steam_root) == sniper
+
+
+def test_runtime_entry_point_no_toolmanifest(steam_root):
+    proton = _make_proton(steam_root, "Proton 11.0")
+    assert steam.runtime_entry_point(proton, steam_root) is None

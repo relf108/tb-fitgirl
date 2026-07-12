@@ -79,13 +79,22 @@ def proton_installs(root: Path | None = None) -> dict[str, Path]:
 
 
 # Steam Linux Runtime app ids -> directory names under steamapps/common.
+# Kept in sync with Steam's appmanifest_<appid>.acf "name"/"installdir".
 _SLR_APPIDS = {
-    "1391110": "SteamLinuxRuntime",  # scout (legacy)
-    "1628350": "SteamLinuxRuntime_soldier",
-    "1070560": "SteamLinuxRuntime",  # scout compat
-    "4183110": "SteamLinuxRuntime_sniper",
-    "1852090": "SteamLinuxRuntime_sniper",
+    "1070560": "SteamLinuxRuntime",  # 1.0 (scout)
+    "1391110": "SteamLinuxRuntime_soldier",  # 2.0 (soldier)
+    "1628350": "SteamLinuxRuntime_sniper",  # 3.0 (sniper)
+    "4183110": "SteamLinuxRuntime_4",  # 4.0
 }
+
+# Newest first: a too-old runtime breaks Proton in subtle ways (e.g. its
+# gnutls is too old for the TLS priority string of Proton 11's wine, so
+# every HTTPS connection from inside the prefix fails).
+_SLR_FALLBACKS = (
+    "SteamLinuxRuntime_4",
+    "SteamLinuxRuntime_sniper",
+    "SteamLinuxRuntime_soldier",
+)
 
 
 def _read_require_tool_appid(proton_script: Path) -> str | None:
@@ -96,22 +105,44 @@ def _read_require_tool_appid(proton_script: Path) -> str | None:
     return match.group(1) if match else None
 
 
+def _appmanifest_installdir(appid: str, root: Path) -> str | None:
+    """installdir of an installed Steam app, from its appmanifest."""
+    for library in library_paths(root):
+        manifest = library / "steamapps" / f"appmanifest_{appid}.acf"
+        if manifest.is_file():
+            match = re.search(r'"installdir"\s+"([^"]+)"', manifest.read_text(errors="replace"))
+            if match:
+                return match.group(1)
+    return None
+
+
 def runtime_entry_point(proton_script: Path, root: Path | None = None) -> Path | None:
     """The Steam Linux Runtime _v2-entry-point a Proton requires, if any.
 
     Running the installer through this container gives Proton the system
     libraries (libvulkan etc.) it needs, independent of the calling shell.
+    It must be the *exact* runtime the Proton build requires: a mismatched
+    (older) container carries libraries Proton's wine cannot use — e.g.
+    Proton 11 under sniper gets a gnutls that rejects wine's TLS priority
+    string, silently breaking all HTTPS inside the prefix.
     """
     appid = _read_require_tool_appid(proton_script)
     if appid is None:
         return None
     root = root or steam_root()
-    dir_name = _SLR_APPIDS.get(appid)
-    candidates = [dir_name] if dir_name else []
-    # Fall back to sniper if the appid is unknown but a runtime exists.
-    candidates += ["SteamLinuxRuntime_sniper", "SteamLinuxRuntime_soldier"]
-    for library in library_paths(root):
-        for name in candidates:
+    candidates: list[str] = []
+    # Steam's own record of where that appid is installed is authoritative.
+    installdir = _appmanifest_installdir(appid, root)
+    if installdir:
+        candidates.append(installdir)
+    known = _SLR_APPIDS.get(appid)
+    if known and known not in candidates:
+        candidates.append(known)
+    # Last resort for unknown appids without a manifest: newest runtime first.
+    candidates += [name for name in _SLR_FALLBACKS if name not in candidates]
+    # Best candidate wins across all libraries (candidate-major order).
+    for name in candidates:
+        for library in library_paths(root):
             entry = library / "steamapps" / "common" / name / "_v2-entry-point"
             if entry.is_file():
                 return entry
