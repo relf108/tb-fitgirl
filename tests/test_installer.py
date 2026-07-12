@@ -9,6 +9,7 @@ import pytest
 
 from tb_fitgirl.installer import (
     InstallError,
+    _has_zero_byte_files,
     _run_watched,
     estimate_installed_size,
     find_repack,
@@ -153,6 +154,122 @@ def test_run_watched_no_ready_uses_runner(tmp_path):
     assert called["cmd"] == ["x"]
     assert result is not None
     assert result.returncode == 0
+
+
+def test_has_zero_byte_files(tmp_path):
+    (tmp_path / "full.dat").write_bytes(b"x")
+    assert not _has_zero_byte_files(tmp_path)
+    (tmp_path / "sub").mkdir()
+    (tmp_path / "sub" / "empty.pak").touch()
+    assert _has_zero_byte_files(tmp_path)
+
+
+def _fake_run_watched(*, finish_after: float = 1.0):
+    """A _run_watched stand-in: returns None if ready fires, else completes."""
+
+    def run(runner, cmd, env, cwd, ready, stop):
+        if ready is not None and ready.wait(timeout=finish_after):
+            stop.set()
+            return None
+        stop.set()
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    return run
+
+
+def _ready_target(tmp_path):
+    target = tmp_path / "game"
+    target.mkdir()
+    (target / "game.exe").write_bytes(b"MZ" * 100)
+    return target
+
+
+def test_install_confirm_accept_terminates_early(repack_dir, tmp_path, monkeypatch):
+    import tb_fitgirl.installer as inst
+
+    monkeypatch.setattr(inst, "_run_watched", _fake_run_watched(finish_after=5.0))
+    target = _ready_target(tmp_path)
+    asked = []
+
+    def confirm():
+        asked.append(True)
+        return True
+
+    start = time.monotonic()
+    install(
+        find_repack(repack_dir),
+        target,
+        wine_prefix=tmp_path / "p",
+        ready_when=lambda d: True,
+        confirm_finish=confirm,
+        ready_stable_secs=0.02,
+        poll_interval=0.01,
+    )
+    assert asked == [True]
+    assert time.monotonic() - start < 5.0  # did not wait for finish_after
+
+
+def test_install_confirm_decline_waits_for_installer(repack_dir, tmp_path, monkeypatch):
+    import tb_fitgirl.installer as inst
+
+    monkeypatch.setattr(inst, "_run_watched", _fake_run_watched(finish_after=0.3))
+    target = _ready_target(tmp_path)
+    asked = []
+
+    def confirm():
+        asked.append(True)
+        return False
+
+    install(
+        find_repack(repack_dir),
+        target,
+        wine_prefix=tmp_path / "p",
+        ready_when=lambda d: True,
+        confirm_finish=confirm,
+        ready_stable_secs=0.02,
+        poll_interval=0.01,
+    )
+    # Declined once; no re-prompt while the directory stays unchanged.
+    assert asked == [True]
+
+
+def test_install_zero_byte_file_suppresses_ready(repack_dir, tmp_path, monkeypatch):
+    import tb_fitgirl.installer as inst
+
+    monkeypatch.setattr(inst, "_run_watched", _fake_run_watched(finish_after=0.3))
+    target = _ready_target(tmp_path)
+    (target / "dlc.pak").touch()  # extraction still in flight
+
+    def confirm():  # pragma: no cover - must not be called
+        raise AssertionError("confirm_finish called despite zero-byte file")
+
+    install(
+        find_repack(repack_dir),
+        target,
+        wine_prefix=tmp_path / "p",
+        ready_when=lambda d: True,
+        confirm_finish=confirm,
+        ready_stable_secs=0.02,
+        poll_interval=0.01,
+    )
+
+
+def test_install_ready_without_confirm_auto_finishes(repack_dir, tmp_path, monkeypatch):
+    import tb_fitgirl.installer as inst
+
+    monkeypatch.setattr(inst, "_run_watched", _fake_run_watched(finish_after=5.0))
+    target = _ready_target(tmp_path)
+
+    start = time.monotonic()
+    install(
+        find_repack(repack_dir),
+        target,
+        wine_prefix=tmp_path / "p",
+        ready_when=lambda d: True,
+        ready_stable_secs=0.02,
+        poll_interval=0.01,
+    )
+    assert time.monotonic() - start < 5.0
 
 
 def test_estimate_installed_size(repack_dir):

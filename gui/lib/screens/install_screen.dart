@@ -63,7 +63,8 @@ class _InstallScreenState extends State<InstallScreen> {
             'source': widget.source,
             'api_key': widget.apiKey,
           },
-          onProgress: _onProgress);
+          onProgress: _onProgress,
+          onConfirm: _onConfirm);
       _operation = operation;
       final result = await operation.result;
       if (!mounted) return;
@@ -84,6 +85,35 @@ class _InstallScreenState extends State<InstallScreen> {
         if (_log.length > 200) _log.removeAt(0);
       }
     });
+  }
+
+  /// The bridge thinks the install is finished (game exe present, install
+  /// directory quiet) but the installer hasn't exited. Ask the user whether
+  /// to terminate it now or keep waiting.
+  Future<bool> _onConfirm(String kind, String message) async {
+    if (!mounted) return true;
+    final answer = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Install looks done'),
+        content: Text(message.isNotEmpty
+            ? message
+            : 'It looks like the install is done but the installer '
+                "hasn't exited. Finish now?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Keep waiting'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Finish now'),
+          ),
+        ],
+      ),
+    );
+    return answer ?? false;
   }
 
   Future<void> _cancel() async {

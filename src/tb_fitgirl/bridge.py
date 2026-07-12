@@ -9,6 +9,12 @@ JSON request per line on stdin, and reads JSON events on stdout:
                         "rate": 0.0, "message": "setup.exe"}}
     result  : {"id": 1, "event": "result", "data": {...}}
     error   : {"id": 1, "event": "error", "data": {"message": "...", "code": null}}
+    confirm : {"id": 1, "event": "confirm",
+               "data": {"kind": "finish_install", "message": "..."}}
+
+A ``confirm`` event is a question: the bridge blocks until the front-end
+writes one reply line, ``{"id": 1, "confirm": true|false}``. If stdin is
+closed the answer defaults to true.
 
 Requests are handled one at a time, in order. Long-running operations are
 cancelled by killing the bridge process (front-ends run one bridge per
@@ -55,6 +61,37 @@ class BridgeError(RuntimeError):
 
 def _write(obj: dict[str, Any]) -> None:
     print(json.dumps(obj), flush=True)
+
+
+# The id of the request currently being handled (requests are strictly
+# serial), so out-of-band events like ``confirm`` can be tagged with it.
+_current_request_id: Any = None
+
+
+def _confirm(*, kind: str, message: str) -> bool:
+    """Ask the front-end a yes/no question and block for its one-line reply.
+
+    Emits a ``confirm`` event and reads one JSON line from stdin, expected as
+    ``{"id": <req id>, "confirm": true|false}``. If stdin is already closed
+    (front-ends that close it after sending the request) or the reply is
+    malformed, the answer defaults to True, preserving the previous
+    auto-finish behaviour.
+    """
+    _write(
+        {
+            "id": _current_request_id,
+            "event": "confirm",
+            "data": {"kind": kind, "message": message},
+        }
+    )
+    line = sys.stdin.readline()
+    if not line.strip():
+        return True
+    try:
+        reply = json.loads(line)
+    except ValueError:
+        return True
+    return bool(reply.get("confirm", True)) if isinstance(reply, dict) else True
 
 
 class _Throttle:
@@ -356,6 +393,12 @@ def op_install(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
         silent=True,
         mute=True,
         ready_when=lambda d: _find_game_exe(d) is not None,
+        confirm_finish=lambda: _confirm(
+            kind="finish_install",
+            message=(
+                "It looks like the install is done but the installer hasn't exited. Finish now?"
+            ),
+        ),
         on_progress=on_progress,
     )
 
@@ -559,6 +602,9 @@ def handle_request(req: dict[str, Any]) -> None:
                 },
             }
         )
+
+    global _current_request_id
+    _current_request_id = req_id  # lets helpers (e.g. _confirm) tag their events
 
     handler = OPS.get(str(op))
     if handler is None:

@@ -108,6 +108,7 @@ class BridgeOperation {
     String op,
     Map<String, dynamic> args, {
     void Function(BridgeProgress progress)? onProgress,
+    Future<bool> Function(String kind, String message)? onConfirm,
   }) async {
     final launch = _resolveBridge();
     if (launch == null) {
@@ -163,6 +164,23 @@ class BridgeOperation {
         switch (decoded['event']) {
           case 'progress':
             onProgress?.call(BridgeProgress.fromJson(payload));
+          case 'confirm':
+            // The bridge blocks until we write one reply line. Without a
+            // handler, answer yes (the bridge's own default when stdin is
+            // closed), preserving auto-finish behaviour.
+            final reqId = decoded['id'];
+            () async {
+              var answer = true;
+              if (onConfirm != null) {
+                answer = await onConfirm(
+                  payload['kind'] as String? ?? '',
+                  payload['message'] as String? ?? '',
+                );
+              }
+              process.stdin
+                  .writeln(jsonEncode({'id': reqId, 'confirm': answer}));
+              await process.stdin.flush();
+            }();
           case 'result':
             completer.complete(payload);
           case 'error':
@@ -187,9 +205,10 @@ class BridgeOperation {
       },
     );
 
+    // Keep stdin open: the bridge may ask a `confirm` question mid-op and
+    // waits for our reply line. It is closed when the op settles (below).
     process.stdin.writeln(jsonEncode({'id': 1, 'op': op, 'args': args}));
     await process.stdin.flush();
-    await process.stdin.close();
 
     final operation = BridgeOperation._(process, completer.future);
     // Reap the bridge once the op settles. Errors surface to callers via
@@ -215,11 +234,13 @@ Future<Map<String, dynamic>> runBridgeOp(
   String op,
   Map<String, dynamic> args, {
   void Function(BridgeProgress progress)? onProgress,
+  Future<bool> Function(String kind, String message)? onConfirm,
 }) async {
   final operation = await BridgeOperation.start(
     op,
     args,
     onProgress: onProgress,
+    onConfirm: onConfirm,
   );
   return operation.result;
 }

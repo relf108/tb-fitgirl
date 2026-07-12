@@ -198,6 +198,18 @@ def _find_game_exe(game_dir: Path) -> Path | None:
     return max(exes, key=lambda p: p.stat().st_size, default=None)
 
 
+def _confirm_finish_prompt() -> bool:
+    """Ask whether to terminate the installer once the game looks usable."""
+    if not sys.stdin.isatty():
+        return True  # non-interactive: keep the old auto-finish behaviour
+    print()  # break out of the \r-rewritten progress line
+    reply = input(
+        "It looks like the install is done but the installer hasn't exited\n"
+        "(FitGirl's finalisation can hang on Windows redists). Finish now? [y/N] "
+    )
+    return reply.strip().lower() in ("y", "yes")
+
+
 def _install_progress(done: int, total: int | None, elapsed: float, rate: float) -> None:
     rate_s = f"{human_size(int(rate))}/s"
     if total:
@@ -359,8 +371,10 @@ def cmd_install(args: argparse.Namespace) -> int:
     target = steam.common_dir() / repack.game_name
     print(f"Installing to {target} (unpacking; this can take a while)...")
     progress = None if args.gui else _install_progress
-    # Stop waiting once the game exe is present: FitGirl's finalisation runs
-    # Windows redists that are irrelevant under Proton and can hang for ages.
+    # Once the game exe is present and the install dir has gone quiet, ask
+    # the user whether to terminate: FitGirl's finalisation runs Windows
+    # redists that are irrelevant under Proton and can hang for ages, but
+    # killing it too early truncates files still being written.
     # In --gui mode leave the installer alone so the user drives it.
     ready_when = None if args.gui else (lambda d: _find_game_exe(d) is not None)
     install(
@@ -372,6 +386,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         silent=not args.gui,
         mute=not args.no_mute,
         ready_when=ready_when,
+        confirm_finish=None if args.gui else _confirm_finish_prompt,
         on_progress=progress,
     )
     if progress is not None:

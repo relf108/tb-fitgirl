@@ -633,3 +633,31 @@ def test_sequential_requests_keep_ids(tmp_path, monkeypatch, capsys):
         (2, "error"),
         (3, "result"),
     ]
+
+
+def test_confirm_emits_event_and_reads_reply(monkeypatch, capsys):
+    monkeypatch.setattr(bridge, "_current_request_id", 7)
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"id": 7, "confirm": false}\n'))
+    assert bridge._confirm(kind="finish_install", message="Done?") is False
+    event = json.loads(capsys.readouterr().out.strip())
+    assert event == {
+        "id": 7,
+        "event": "confirm",
+        "data": {"kind": "finish_install", "message": "Done?"},
+    }
+
+
+def test_confirm_true_reply(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"confirm": true}\n'))
+    assert bridge._confirm(kind="finish_install", message="?") is True
+
+
+def test_confirm_defaults_true_when_stdin_closed(monkeypatch, capsys):
+    # Front-ends that close stdin after the request keep the old auto-finish.
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert bridge._confirm(kind="finish_install", message="?") is True
+
+
+def test_confirm_defaults_true_on_malformed_reply(monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json\n"))
+    assert bridge._confirm(kind="finish_install", message="?") is True

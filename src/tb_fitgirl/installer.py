@@ -85,6 +85,22 @@ def _dir_size(path: Path) -> int:
     return total
 
 
+def _has_zero_byte_files(path: Path) -> bool:
+    """True if any regular file under *path* is empty.
+
+    FitGirl's unpacker creates files before writing them; an empty file is a
+    strong signal that extraction is still in flight (or was cut off), so we
+    must not treat the install as finished.
+    """
+    for p in path.rglob("*"):
+        try:
+            if p.is_file() and p.stat().st_size == 0:
+                return True
+        except OSError:
+            pass
+    return False
+
+
 def find_repack(path: Path | str) -> RepackDir:
     """Validate *path* as a FitGirl repack directory."""
     path = Path(path).expanduser()
@@ -230,6 +246,8 @@ def install(
     silent: bool = True,
     mute: bool = True,
     ready_when: Callable[[Path], bool] | None = None,
+    confirm_finish: Callable[[], bool] | None = None,
+    ready_stable_secs: float = 10.0,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     on_progress: InstallProgressFn | None = None,
     poll_interval: float = 1.0,
@@ -241,6 +259,14 @@ def install(
     Proton is more reliable for FitGirl's unpacker. If *on_progress* is given,
     a background thread polls the growing target directory and reports
     (bytes, estimated_total, elapsed, bytes_per_sec). Returns the target dir.
+
+    If *ready_when* is given, the watcher considers the install "probably
+    done" once the predicate holds, the target dir size has been stable for
+    *ready_stable_secs*, and no zero-byte files remain. If *confirm_finish*
+    is also given it is called (it may block, e.g. asking the user); only a
+    True return terminates the installer early. A False return suppresses
+    further prompts until the directory grows again. Without *confirm_finish*
+    the installer is terminated as soon as the readiness condition holds.
     """
     target_dir = Path(target_dir).expanduser()
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -279,6 +305,7 @@ def install(
         last_t = started
         last_done = 0
         stable_since: float | None = None
+        declined = False  # user said "keep waiting": don't re-prompt until growth
         while not stop.is_set():
             now = time.monotonic()
             done = _dir_size(target_dir)
@@ -287,16 +314,26 @@ def install(
             if on_progress is not None:
                 on_progress(done, estimate, now - started, max(rate, 0.0))
             if ready_when is not None and ready_when(target_dir):
-                # Require the size to hold steady briefly so we don't cut off
-                # an install that's still actively writing game data.
+                # Require the size to hold steady so we don't cut off an
+                # install that's still actively writing game data.
                 if done == last_done:
                     if stable_since is None:
                         stable_since = now
-                    elif now - stable_since >= 2 * poll_interval:
-                        ready.set()
-                        return
+                    elif (
+                        now - stable_since >= ready_stable_secs
+                        and not declined
+                        # An empty file means extraction is still in flight.
+                        and not _has_zero_byte_files(target_dir)
+                    ):
+                        if confirm_finish is None or confirm_finish():
+                            ready.set()
+                            return
+                        if stop.is_set():
+                            return  # installer exited while we were asking
+                        declined = True
                 else:
                     stable_since = None
+                    declined = False
             last_t, last_done = now, done
             stop.wait(poll_interval)
 
