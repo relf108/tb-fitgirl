@@ -7,7 +7,7 @@ from httpx import Response
 
 from tb_fitgirl import bridge
 from tb_fitgirl.scrapers.fitgirl import BASE_URL
-from tb_fitgirl.torbox import MAIN_API
+from tb_fitgirl.torbox import MAIN_API, TorboxClient
 
 HASH = "abcdef1234567890abcdef1234567890abcdef12"
 MAGNET = f"magnet:?xt=urn:btih:{HASH}&dn=Pragmata"
@@ -153,6 +153,74 @@ def test_cache_by_title(monkeypatch, capsys):
     )
     data = events_of(events, "result")[0]["data"]
     assert data["cached"] is True
+
+
+@respx.mock
+def test_cache_by_post_url_skips_search(monkeypatch, capsys):
+    # No search route mocked: routing a URL through search would raise.
+    respx.get("https://fitgirl-repacks.site/pragmata/").mock(
+        return_value=Response(200, text=POST_HTML)
+    )
+    _mock_checkcached(cached=True)
+    respx.post(f"{MAIN_API}/torrents/createtorrent").mock(
+        return_value=Response(200, json={"success": True, "data": {"torrent_id": 1, "hash": HASH}})
+    )
+    events = run_bridge(
+        [
+            {
+                "id": 1,
+                "op": "cache",
+                "args": {"target": "https://fitgirl-repacks.site/pragmata/"},
+            }
+        ],
+        monkeypatch,
+        capsys,
+    )
+    data = events_of(events, "result")[0]["data"]
+    assert data["cached"] is True
+
+
+@respx.mock
+def test_resolve_or_add_opens_post_url():
+    respx.get(f"{MAIN_API}/torrents/mylist").mock(
+        return_value=Response(200, json={"success": True, "data": []})
+    )
+    respx.get("https://fitgirl-repacks.site/pragmata/").mock(
+        return_value=Response(200, text=POST_HTML)
+    )
+    _mock_checkcached(cached=True)
+    respx.post(f"{MAIN_API}/torrents/createtorrent").mock(
+        return_value=Response(200, json={"success": True, "data": {"torrent_id": 7, "hash": HASH}})
+    )
+
+    emitted: list[dict] = []
+    url = "https://fitgirl-repacks.site/pragmata/"
+    with TorboxClient() as tb:
+        assert bridge._resolve_or_add(tb, lambda **kw: emitted.append(kw), url, "fitgirl") == 7
+    messages = [e.get("message", "") for e in emitted]
+    # Post URLs are opened directly; the message names the URL, not the source.
+    assert f"Opening {url}..." in messages
+    assert not any(m.startswith("Searching") for m in messages)
+
+
+@respx.mock
+def test_resolve_or_add_searches_foreign_url():
+    respx.get(f"{MAIN_API}/torrents/mylist").mock(
+        return_value=Response(200, json={"success": True, "data": []})
+    )
+    # A non-fitgirl URL is not "opened"; it falls through to a search query.
+    respx.get(BASE_URL, params={"s": "https://example.com/game/"}).mock(
+        return_value=Response(200, text="<html><body></body></html>")
+    )
+
+    emitted: list[dict] = []
+    with TorboxClient() as tb, pytest.raises(bridge.BridgeError, match="No magnet found"):
+        bridge._resolve_or_add(
+            tb, lambda **kw: emitted.append(kw), "https://example.com/game/", "fitgirl"
+        )
+    messages = [e.get("message", "") for e in emitted]
+    assert "Searching fitgirl for 'https://example.com/game/'..." in messages
+    assert not any(m.startswith("Opening") for m in messages)
 
 
 @respx.mock

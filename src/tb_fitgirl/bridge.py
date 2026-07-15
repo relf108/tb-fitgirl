@@ -139,8 +139,13 @@ def _resolve_or_add(tb: TorboxClient, emit: EmitFn, target: str, source: str) ->
         raise BridgeError(f"Torrent id {target} not found in your TorBox account.")
     magnet = target
     if not magnet.startswith("magnet:"):
-        emit(phase="scrape", message=f"Searching {source} for '{target}'...")
         with get_scraper(source) as scraper:
+            # Ask the scraper whether the target is a post URL it can open
+            # directly; anything else (including foreign URLs) is searched.
+            if scraper.repack_from_url(target) is not None:
+                emit(phase="scrape", message=f"Opening {target}...")
+            else:
+                emit(phase="scrape", message=f"Searching {source} for '{target}'...")
             repack = scraper.find_repack(target)
         if repack is None or repack.primary_magnet is None:
             raise BridgeError(f"No magnet found for '{target}' via '{source}'.")

@@ -27,9 +27,40 @@ class Scraper(ABC):
     def fetch_magnets(self, repack: Repack) -> Repack:
         """Populate ``repack.magnets`` from its post page and return it."""
 
+    def repack_from_url(self, url: str) -> Repack | None:
+        """Build a :class:`Repack` directly from a post URL, if recognised.
+
+        Returns ``None`` when *url* is not a post URL for this source, so
+        callers fall back to treating the string as a search query. Override
+        in subclasses that can map their own post URLs to repacks.
+        """
+        return None
+
+    def relax_query(self, query: str) -> str | None:
+        """A less specific search query, or ``None`` if none is worthwhile.
+
+        Post titles carry version/edition/DLC noise that WordPress search
+        won't match verbatim; a relaxed query drops that so an over-specific
+        exact title still finds its post. Default: no relaxation.
+        """
+        return None
+
     def find_repack(self, query: str) -> Repack | None:
-        """Convenience: first search hit with magnets populated."""
+        """First result with magnets populated for *query*.
+
+        *query* may be a post URL (resolved directly, skipping search) or a
+        title. When an exact-title search finds nothing, retry once with a
+        relaxed query (see :meth:`relax_query`).
+        """
+        from_url = self.repack_from_url(query)
+        if from_url is not None:
+            return self.fetch_magnets(from_url)
+
         results = self.search(query, limit=1)
+        if not results:
+            relaxed = self.relax_query(query)
+            if relaxed and relaxed != query:
+                results = self.search(relaxed, limit=1)
         if not results:
             return None
         return self.fetch_magnets(results[0])

@@ -1,11 +1,13 @@
+import argparse
+
 import httpx
 import pytest
 import respx
 from httpx import Response
 
-from tb_fitgirl.cli import build_parser, main
+from tb_fitgirl.cli import _add_to_account, build_parser, main
 from tb_fitgirl.scrapers.fitgirl import BASE_URL
-from tb_fitgirl.torbox import MAIN_API
+from tb_fitgirl.torbox import MAIN_API, TorboxClient
 
 HASH = "abcdef1234567890abcdef1234567890abcdef12"
 MAGNET = f"magnet:?xt=urn:btih:{HASH}&dn=Pragmata"
@@ -76,6 +78,59 @@ def test_cache_by_title_adds(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Cache status: cached" in out
     assert "Added to TorBox" in out
+
+
+@respx.mock
+def test_cache_by_post_url_skips_search(monkeypatch, capsys):
+    monkeypatch.setenv("TORBOX_API_KEY", "test-key")
+    # No search route mocked: routing a URL through search would raise.
+    respx.get("https://fitgirl-repacks.site/pragmata/").mock(
+        return_value=Response(200, text=POST_HTML)
+    )
+    _mock_checkcached(cached=True)
+    respx.post(f"{MAIN_API}/torrents/createtorrent").mock(
+        return_value=Response(200, json={"success": True, "data": {"torrent_id": 1, "hash": HASH}})
+    )
+
+    assert main(["cache", "https://fitgirl-repacks.site/pragmata/"]) == 0
+    out = capsys.readouterr().out
+    assert "Added to TorBox" in out
+
+
+@respx.mock
+def test_add_to_account_opens_post_url(monkeypatch, capsys):
+    monkeypatch.setenv("TORBOX_API_KEY", "test-key")
+    respx.get("https://fitgirl-repacks.site/pragmata/").mock(
+        return_value=Response(200, text=POST_HTML)
+    )
+    _mock_checkcached(cached=True)
+    respx.post(f"{MAIN_API}/torrents/createtorrent").mock(
+        return_value=Response(200, json={"success": True, "data": {"torrent_id": 7, "hash": HASH}})
+    )
+
+    args = argparse.Namespace(target="https://fitgirl-repacks.site/pragmata/", source="fitgirl")
+    with TorboxClient() as tb:
+        assert _add_to_account(tb, args) == 7
+    out = capsys.readouterr().out
+    # Post URLs are opened directly; the message names the URL, not the source.
+    assert "opening https://fitgirl-repacks.site/pragmata/..." in out
+    assert "scraping" not in out
+
+
+@respx.mock
+def test_add_to_account_searches_foreign_url(monkeypatch, capsys):
+    monkeypatch.setenv("TORBOX_API_KEY", "test-key")
+    # A non-fitgirl URL is not "opened"; it falls through to a search query.
+    respx.get(BASE_URL, params={"s": "https://example.com/game/"}).mock(
+        return_value=Response(200, text="<html><body></body></html>")
+    )
+
+    args = argparse.Namespace(target="https://example.com/game/", source="fitgirl")
+    with TorboxClient() as tb:
+        assert _add_to_account(tb, args) is None
+    out = capsys.readouterr().out
+    assert "scraping 'fitgirl' for 'https://example.com/game/'" in out
+    assert "opening" not in out
 
 
 @respx.mock

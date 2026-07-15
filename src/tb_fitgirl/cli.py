@@ -112,8 +112,13 @@ def _add_to_account(tb: TorboxClient, args: argparse.Namespace) -> int | None:
     """Scrape (if needed), cache-check, and add the target. Returns torrent id."""
     magnet = args.target
     if not magnet.startswith("magnet:"):
-        print(f"Not in your account; scraping '{args.source}' for '{args.target}'...")
         with get_scraper(args.source) as scraper:
+            # Ask the scraper whether the target is a post URL it can open
+            # directly; anything else (including foreign URLs) is searched.
+            if scraper.repack_from_url(args.target) is not None:
+                print(f"Not in your account; opening {args.target}...")
+            else:
+                print(f"Not in your account; scraping '{args.source}' for '{args.target}'...")
             repack = scraper.find_repack(args.target)
         if repack is None or repack.primary_magnet is None:
             print(f"No magnet found for '{args.target}' via '{args.source}'.")
