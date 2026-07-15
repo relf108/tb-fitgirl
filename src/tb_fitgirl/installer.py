@@ -85,20 +85,28 @@ def _dir_size(path: Path) -> int:
     return total
 
 
-def _has_zero_byte_files(path: Path) -> bool:
-    """True if any regular file under *path* is empty.
+def _zero_byte_files(path: Path) -> frozenset[Path]:
+    """The set of empty regular files under *path*.
 
-    FitGirl's unpacker creates files before writing them; an empty file is a
-    strong signal that extraction is still in flight (or was cut off), so we
-    must not treat the install as finished.
+    FitGirl's unpacker creates files before writing them, so an empty file
+    usually means extraction is still in flight (or was cut off). But some
+    games legitimately ship zero-byte files (e.g. Perforce ``.p4keep``
+    placeholders), so callers must not treat a non-empty set as a permanent
+    "not finished" signal — see the readiness logic in :func:`install`.
     """
+    zeros = set()
     for p in path.rglob("*"):
         try:
             if p.is_file() and p.stat().st_size == 0:
-                return True
+                zeros.add(p)
         except OSError:
             pass
-    return False
+    return frozenset(zeros)
+
+
+def _has_zero_byte_files(path: Path) -> bool:
+    """True if any regular file under *path* is empty."""
+    return bool(_zero_byte_files(path))
 
 
 def find_repack(path: Path | str) -> RepackDir:
@@ -248,6 +256,7 @@ def install(
     ready_when: Callable[[Path], bool] | None = None,
     confirm_finish: Callable[[], bool] | None = None,
     ready_stable_secs: float = 10.0,
+    zero_stable_secs: float = 60.0,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
     on_progress: InstallProgressFn | None = None,
     poll_interval: float = 1.0,
@@ -261,10 +270,14 @@ def install(
     (bytes, estimated_total, elapsed, bytes_per_sec). Returns the target dir.
 
     If *ready_when* is given, the watcher considers the install "probably
-    done" once the predicate holds, the target dir size has been stable for
-    *ready_stable_secs*, and no zero-byte files remain. If *confirm_finish*
-    is also given it is called (it may block, e.g. asking the user); only a
-    True return terminates the installer early. A False return suppresses
+    done" once the predicate holds and the target dir size has been stable
+    for *ready_stable_secs*. Zero-byte files usually mean extraction is
+    still in flight, so while any exist (or the set of them changes) the
+    required stability window is extended to *zero_stable_secs* — but some
+    games legitimately ship empty files (e.g. ``.p4keep``), so a persistent,
+    unchanged set does not block readiness forever. If *confirm_finish* is
+    given it is called (it may block, e.g. asking the user); only a True
+    return terminates the installer early. A False return suppresses
     further prompts until the directory grows again. Without *confirm_finish*
     the installer is terminated as soon as the readiness condition holds.
     """
@@ -305,6 +318,7 @@ def install(
         last_t = started
         last_done = 0
         stable_since: float | None = None
+        zero_seen: frozenset[Path] = frozenset()
         declined = False  # user said "keep waiting": don't re-prompt until growth
         while not stop.is_set():
             now = time.monotonic()
@@ -319,12 +333,19 @@ def install(
                 if done == last_done:
                     if stable_since is None:
                         stable_since = now
-                    elif (
-                        now - stable_since >= ready_stable_secs
-                        and not declined
-                        # An empty file means extraction is still in flight.
-                        and not _has_zero_byte_files(target_dir)
-                    ):
+                    # Empty files usually mean extraction is in flight, but
+                    # some games ship them legitimately (e.g. .p4keep), so
+                    # they extend the required stability window rather than
+                    # blocking readiness forever. Creating/filling an empty
+                    # file doesn't change the dir size, so a changed set
+                    # restarts the clock.
+                    zeros = _zero_byte_files(target_dir)
+                    if zeros != zero_seen:
+                        zero_seen = zeros
+                        if zeros:
+                            stable_since = now
+                    required = zero_stable_secs if zeros else ready_stable_secs
+                    if now - stable_since >= required and not declined:
                         if confirm_finish is None or confirm_finish():
                             ready.set()
                             return
@@ -333,6 +354,7 @@ def install(
                         declined = True
                 else:
                     stable_since = None
+                    zero_seen = frozenset()
                     declined = False
             last_t, last_done = now, done
             stop.wait(poll_interval)

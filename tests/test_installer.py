@@ -233,7 +233,7 @@ def test_install_confirm_decline_waits_for_installer(repack_dir, tmp_path, monke
     assert asked == [True]
 
 
-def test_install_zero_byte_file_suppresses_ready(repack_dir, tmp_path, monkeypatch):
+def test_install_zero_byte_file_extends_stability_window(repack_dir, tmp_path, monkeypatch):
     import tb_fitgirl.installer as inst
 
     monkeypatch.setattr(inst, "_run_watched", _fake_run_watched(finish_after=0.3))
@@ -250,8 +250,38 @@ def test_install_zero_byte_file_suppresses_ready(repack_dir, tmp_path, monkeypat
         ready_when=lambda d: True,
         confirm_finish=confirm,
         ready_stable_secs=0.02,
+        zero_stable_secs=10.0,  # longer than finish_after: never reached
         poll_interval=0.01,
     )
+
+
+def test_install_persistent_zero_byte_file_eventually_ready(repack_dir, tmp_path, monkeypatch):
+    """A shipped empty file (e.g. .p4keep) must not suppress the prompt forever."""
+    import tb_fitgirl.installer as inst
+
+    monkeypatch.setattr(inst, "_run_watched", _fake_run_watched(finish_after=5.0))
+    target = _ready_target(tmp_path)
+    (target / "Assets").mkdir()
+    (target / "Assets" / ".p4keep").touch()  # legitimate zero-byte file
+    asked = []
+
+    def confirm():
+        asked.append(True)
+        return True
+
+    start = time.monotonic()
+    install(
+        find_repack(repack_dir),
+        target,
+        wine_prefix=tmp_path / "p",
+        ready_when=lambda d: True,
+        confirm_finish=confirm,
+        ready_stable_secs=0.02,
+        zero_stable_secs=0.1,
+        poll_interval=0.01,
+    )
+    assert asked == [True]
+    assert time.monotonic() - start < 5.0  # terminated early despite the empty file
 
 
 def test_install_ready_without_confirm_auto_finishes(repack_dir, tmp_path, monkeypatch):
