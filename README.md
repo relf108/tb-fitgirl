@@ -9,21 +9,55 @@ by default).
 
 ## Setup
 
-Requires nix + direnv, and a Steam install with at least one Proton runtime.
+Runtime expectations for all install methods: a Steam install with at least
+one Proton runtime. On NixOS, `steam-run` on PATH is picked up automatically.
+
+### AppImage (recommended for non-NixOS)
+
+One file with the GUI plus frozen CLI/bridge (no host Python):
 
 ```sh
-direnv allow                              # dev shell (Python 3.14 + deps)
-echo 'TORBOX_API_KEY=<your-key>' > .env   # key from torbox.app/settings
+chmod +x tb-fitgirl-*-x86_64.AppImage
+./tb-fitgirl-*-x86_64.AppImage                      # GUI
+./tb-fitgirl-*-x86_64.AppImage --cli search "..."   # CLI
+./tb-fitgirl-*-x86_64.AppImage --bridge             # JSON-lines bridge
+```
+
+Build it yourself (needs Flutter, Python 3.10+ with venv/pip, a C compiler
+for the process-group wrapper, and network on first run for pip +
+appimagetool; freezes the Python side with PyInstaller so the AppImage has
+no host-Python dependency):
+
+```sh
+make appimage    # -> dist/tb-fitgirl-<version>-x86_64.AppImage
+```
+
+The GUI stores your TorBox API key in the OS keyring (`secret-tool`); set
+`TORBOX_API_KEY` in the environment as a read-only fallback.
+
+### pipx / uv (CLI only)
+
+```sh
+pipx install git+https://github.com/relf108/tb-fitgirl.git
+# or from a checkout:  pipx install .
+export TORBOX_API_KEY=<your-key>   # from torbox.app/settings
+tb-fitgirl search "pragmata"
+```
+
+### Dev shell (Nix + direnv)
+
+```sh
+direnv allow                              # Python + Flutter + deps
+echo 'TORBOX_API_KEY=<your-key>' > .env
 ```
 
 ### Installing on NixOS
 
-The flake exposes the CLI (and `tb-fitgirl-bridge`, the GUI's back end) as
-an installable package. In your NixOS config flake:
+The flake exposes the CLI, `tb-fitgirl-bridge`, and the GUI as installable
+packages. In your NixOS config flake:
 
 ```nix
-inputs.tb-fitgirl.url = "git+file:///home/you/Projects/tb-fitgirl";
-# or github:you/tb-fitgirl once pushed
+inputs.tb-fitgirl.url = "github:relf108/tb-fitgirl";
 
 # in your system configuration:
 environment.systemPackages = [
@@ -32,33 +66,36 @@ environment.systemPackages = [
 ```
 
 Set `TORBOX_API_KEY` in the environment (or pass `api_key` per bridge
-request). Runtime expectations: a Steam install with a Proton runtime, and
-on NixOS `steam-run` on PATH (it's picked up automatically when present).
+request).
 
 ## Usage
 
+Installed commands are `tb-fitgirl` and `tb-fitgirl-bridge`. From a checkout
+you can use `python -m tb_fitgirl.cli` / `python -m tb_fitgirl.bridge`
+instead (same ops).
+
 ```sh
 # Search a repack source and show TorBox cache status
-python -m tb_fitgirl.cli search "pragmata" [--limit N] [--source fitgirl]
+tb-fitgirl search "pragmata" [--limit N] [--source fitgirl]
 
 # Cache a repack on TorBox (scrapes the magnet by title, or takes a magnet URI)
-python -m tb_fitgirl.cli cache "pragmata"
-python -m tb_fitgirl.cli cache "magnet:?xt=urn:btih:..." [--only-if-cached]
+tb-fitgirl cache "pragmata"
+tb-fitgirl cache "magnet:?xt=urn:btih:..." [--only-if-cached]
 
 # Download from your TorBox account (auto-caches first if needed)
-python -m tb_fitgirl.cli download "pragmata"            # -> ~/TBFGames
-python -m tb_fitgirl.cli download "pragmata" --dest /mnt/games
+tb-fitgirl download "pragmata"            # -> ~/TBFGames
+tb-fitgirl download "pragmata" --dest /mnt/games
 
 # Install: auto-downloads if not present, unpacks via Proton, adds to Steam
 # and the app launcher. Close Steam first (it rewrites shortcuts on exit).
-python -m tb_fitgirl.cli install "pragmata"
+tb-fitgirl install "pragmata"
 
 # Add an already-installed game to Steam + launcher (no reinstall)
-python -m tb_fitgirl.cli steam-add "pragmata"
+tb-fitgirl steam-add "pragmata"
 
 # Uninstall: remove game files, Steam shortcut, and launcher entry
-python -m tb_fitgirl.cli uninstall "pragmata"
-python -m tb_fitgirl.cli uninstall "pragmata" --keep-files   # shortcuts only
+tb-fitgirl uninstall "pragmata"
+tb-fitgirl uninstall "pragmata" --keep-files   # shortcuts only
 ```
 
 After installing, set the Proton version in Steam
@@ -83,14 +120,17 @@ logic stays in Python; Flutter is presentation only.
 make gui-run     # generate the Linux runner (one-off) + flutter run
 make gui-test    # flutter analyze + widget tests
 make gui-build   # release build -> gui/build/linux/.../tbfg_gui
+make appimage    # single-file AppImage (GUI + CLI + bridge) -> dist/
 ```
 
 - On first run it prompts for your TorBox API key, validates it, and stores
   it in the OS keyring via `secret-tool` (never a file). `TORBOX_API_KEY`
   in the environment works as a read-only fallback.
-- The GUI finds the Python back end by looking for `src/tb_fitgirl/bridge.py`
-  upward from the working directory; set `TBFG_BACKEND=/path/to/checkout`
-  (and optionally `TBFG_PYTHON`) when running the built binary elsewhere.
+- The GUI prefers `tb-fitgirl-bridge` on PATH (Nix/AppImage install), then
+  falls back to a dev checkout via `src/tb_fitgirl/bridge.py` near the
+  working directory or executable. Set `TBFG_BACKEND=/path/to/checkout`
+  (and optionally `TBFG_PYTHON`) when running a bare `flutter build` binary
+  outside the checkout.
 - All direct dependencies are SDK-provided (no explicit hosted packages);
   the first `pub get` only resolves Flutter's own pinned deps.
 
@@ -127,4 +167,3 @@ make check   # both
   `steam-run` automatically (no-op elsewhere). Silent installs use `/SILENT`
   (not `/VERYSILENT`, which deadlocks the unpacker) and stop once the game
   exe appears, skipping FitGirl's Proton-irrelevant finalisation step.
-# tb-fitgirl

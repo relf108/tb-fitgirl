@@ -50,29 +50,8 @@
               (pkgs.lib.makeBinPath [ pkgs.procps ])
             ];
 
-            # A launcher for the GUI's stdio bridge (mirrors bridge.py's
-            # __main__ block incl. the process-group setup for cancel).
-            # Cleaner as a [project.scripts] entry eventually; kept at the
-            # packaging layer for now. wrapPythonPrograms gives it the same
-            # environment as the CLI.
-            postInstall = ''
-              cat > $out/bin/tb-fitgirl-bridge <<'EOF'
-              #!${python.interpreter}
-              import os
-              import sys
-
-              from tb_fitgirl.bridge import main
-
-              if __name__ == "__main__":
-                  try:
-                      os.setpgid(0, 0)
-                  except OSError:
-                      pass
-                  sys.exit(main())
-              EOF
-              sed -i 's/^              //' $out/bin/tb-fitgirl-bridge
-              chmod +x $out/bin/tb-fitgirl-bridge
-            '';
+            # tb-fitgirl-bridge comes from [project.scripts] (cli_main does
+            # the process-group setup for cancel).
 
             meta = {
               description = "Find, cache (TorBox), download and install FitGirl repacks on Linux via Proton";

@@ -1,0 +1,24 @@
+#!/bin/sh
+# AppImage entry: Flutter GUI with frozen Python bridge on PATH.
+#   ./tb-fitgirl-*.AppImage              # GUI
+#   ./tb-fitgirl-*.AppImage --cli ...    # frozen tb-fitgirl CLI
+#   ./tb-fitgirl-*.AppImage --bridge     # frozen JSON-lines bridge
+set -e
+
+HERE="$(dirname "$(readlink -f "$0")")"
+
+# Bundled CLI + bridge first; keep host PATH for Steam/Proton/secret-tool.
+export PATH="${HERE}/usr/bin:${PATH}"
+
+case "${1-}" in
+  --cli)
+    shift
+    exec "${HERE}/usr/bin/tb-fitgirl" "$@"
+    ;;
+  --bridge)
+    shift
+    exec "${HERE}/usr/bin/tb-fitgirl-bridge" "$@"
+    ;;
+esac
+
+exec "${HERE}/usr/bin/tbfg_gui" "$@"

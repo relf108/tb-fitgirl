@@ -1,5 +1,6 @@
 import io
 import json
+import sys
 
 import pytest
 import respx
@@ -729,3 +730,33 @@ def test_confirm_defaults_true_when_stdin_closed(monkeypatch, capsys):
 def test_confirm_defaults_true_on_malformed_reply(monkeypatch, capsys):
     monkeypatch.setattr("sys.stdin", io.StringIO("not json\n"))
     assert bridge._confirm(kind="finish_install", message="?") is True
+
+
+def test_cli_main_setpgid_when_not_frozen(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    calls: list[tuple[int, int]] = []
+
+    def fake_setpgid(pid, pgrp):
+        calls.append((pid, pgrp))
+
+    monkeypatch.setattr("os.setpgid", fake_setpgid)
+    monkeypatch.delattr(sys, "frozen", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        bridge.cli_main()
+    assert exc.value.code == 0
+    assert calls == [(0, 0)]
+
+
+def test_cli_main_skips_setpgid_when_frozen(monkeypatch):
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    calls: list[tuple[int, int]] = []
+
+    def fake_setpgid(pid, pgrp):
+        calls.append((pid, pgrp))
+
+    monkeypatch.setattr("os.setpgid", fake_setpgid)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    with pytest.raises(SystemExit) as exc:
+        bridge.cli_main()
+    assert exc.value.code == 0
+    assert calls == []

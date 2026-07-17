@@ -1,4 +1,4 @@
-.PHONY: qa fmt test check gui-create gui-run gui-build gui-test update-pubspec-json
+.PHONY: qa fmt test check gui-create gui-run gui-build gui-test update-pubspec-json appimage
 
 qa:
 	ruff check src tests
@@ -27,6 +27,11 @@ gui-build: gui-create
 
 gui-test: gui-create
 	cd gui && flutter analyze && flutter test
+
+# Single-file AppImage: Flutter GUI + frozen Python CLI/bridge. Output under dist/.
+# Needs flutter, python3 (venv+pip), and network (pip + appimagetool) on first run.
+appimage:
+	bash scripts/build-appimage.sh
 
 # Keep gui/pubspec.lock.json in sync with gui/pubspec.lock after `flutter pub upgrade`.
 # The JSON copy lets the Nix flake read the lock without import-from-derivation.

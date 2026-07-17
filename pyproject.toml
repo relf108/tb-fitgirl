@@ -17,6 +17,7 @@ dev = [
 
 [project.scripts]
 tb-fitgirl = "tb_fitgirl.cli:main"
+tb-fitgirl-bridge = "tb_fitgirl.bridge:cli_main"
 
 [build-system]
 requires = ["setuptools>=68"]

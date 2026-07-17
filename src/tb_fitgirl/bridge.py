@@ -702,15 +702,27 @@ def main() -> int:
     return 0
 
 
-if __name__ == "__main__":
-    # Become a process-group leader so a front-end can cancel by killing the
-    # group (Proton/unpacker children included). Deliberately NOT setsid():
-    # detaching from the session/terminal makes Proton's unpacker hang
-    # (observed stuck in kernel snd_power_wait on the installer's audio).
+def cli_main() -> None:
+    """Console-script entry for ``tb-fitgirl-bridge``.
+
+    Become a process-group leader so a front-end can cancel by killing the
+    group (Proton/unpacker children included). Deliberately NOT setsid():
+    detaching from the session/terminal makes Proton's unpacker hang
+    (observed stuck in kernel snd_power_wait on the installer's audio).
+
+    Skip setpgid when frozen (PyInstaller): the bootloader is a separate
+    parent process; Flutter tracks that PID. AppImage ships a thin
+    ``pgrp-exec`` wrapper that owns the group before exec'ing the binary.
+    """
     import os
 
-    try:
-        os.setpgid(0, 0)
-    except OSError:
-        pass
-    sys.exit(main())
+    if not getattr(sys, "frozen", False):
+        try:
+            os.setpgid(0, 0)
+        except OSError:
+            pass
+    raise SystemExit(main())
+
+
+if __name__ == "__main__":
+    cli_main()
