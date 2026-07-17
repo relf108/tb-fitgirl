@@ -44,7 +44,10 @@
 
             # steam_running() shells out to pgrep.
             makeWrapperArgs = [
-              "--prefix" "PATH" ":" (pkgs.lib.makeBinPath [ pkgs.procps ])
+              "--prefix"
+              "PATH"
+              ":"
+              (pkgs.lib.makeBinPath [ pkgs.procps ])
             ];
 
             # A launcher for the GUI's stdio bridge (mirrors bridge.py's
@@ -132,24 +135,33 @@
             beautifulsoup4
             pytest
             respx
+            pip
+            pynvim
+            debugpy
+            ruff
           ]);
         in
         {
           default = pkgs.mkShell {
+            venvDir = ".venv";
             packages = [
               pythonEnv
-              pkgs.ruff
+              python.pkgs.venvShellHook
               # Flutter GUI (gui/): SDK + Linux desktop build deps
               pkgs.flutter
               pkgs.cmake
               pkgs.ninja
               pkgs.clang
               pkgs.pkg-config
+              pkgs.pyright
             ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               pkgs.gtk3
               pkgs.libsecret # secret-tool, used by the GUI for API key storage
             ];
-            shellHook = ''
+            postVenvCreation = ''
+              echo ${pythonEnv}/${python.sitePackages} > "$venvDir/${python.sitePackages}/nix-packages.pth"
+            '';
+            postShellHook = ''
               export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
             '';
           };

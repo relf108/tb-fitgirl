@@ -11,10 +11,15 @@ JSON request per line on stdin, and reads JSON events on stdout:
     error   : {"id": 1, "event": "error", "data": {"message": "...", "code": null}}
     confirm : {"id": 1, "event": "confirm",
                "data": {"kind": "finish_install", "message": "..."}}
+    multiple_exes : {"id": 1, "event": "multiple_exes",
+                     "data": {"exes": ["/path/to/game.exe", ...]}}
 
-A ``confirm`` event is a question: the bridge blocks until the front-end
-writes one reply line, ``{"id": 1, "confirm": true|false}``. If stdin is
-closed the answer defaults to true.
+A ``confirm`` or ``multiple_exes`` event is a question: the bridge blocks
+until the front-end writes one reply line. For ``confirm`` the reply is
+``{"id": 1, "confirm": true|false}`` (defaults to true if stdin is closed).
+For ``multiple_exes`` the reply is ``{"id": 1, "selected": "/path/to/game.exe"}``
+naming one of the offered paths; if stdin is closed or the reply is
+malformed, the first (largest) exe is used.
 
 Requests are handled one at a time, in order. Long-running operations are
 cancelled by killing the bridge process (front-ends run one bridge per
@@ -301,14 +306,41 @@ def _add_shortcut(name: str, exe: Path, *, app_menu: bool) -> dict[str, Any]:
     }
 
 
+def _choose_exe(exes: list[Path]) -> Path:
+    """If multiple exes found, ask the front-end which to use."""
+    if len(exes) == 1:
+        return exes[0]
+    _write(
+        {
+            "id": _current_request_id,
+            "event": "multiple_exes",
+            "data": {"exes": [str(e) for e in exes]},
+        }
+    )
+    line = sys.stdin.readline()
+    if not line.strip():
+        return exes[0]
+    try:
+        reply = json.loads(line)
+    except ValueError:
+        return exes[0]
+    selected = str(reply.get("selected", "")) if isinstance(reply, dict) else ""
+    if selected:
+        chosen = Path(selected)
+        if chosen in exes:
+            return chosen
+    return exes[0]
+
+
 def op_steam_add(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
     target = str(args.get("target") or "")
     game_dir = _find_installed_dir(target)
     if game_dir is None:
         raise BridgeError(f"No installed game directory found for '{target}'.")
-    exe = _find_game_exe(game_dir)
-    if exe is None:
+    exes = _find_game_exe(game_dir)
+    if not exes:
         raise BridgeError(f"No game exe found under {game_dir}.")
+    exe = _choose_exe(exes)
     shortcut = _add_shortcut(game_dir.name, exe, app_menu=not args.get("no_app_menu"))
     return {"name": game_dir.name, "exe": str(exe), **shortcut}
 
@@ -397,7 +429,7 @@ def op_install(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
         use_steam_run=not args.get("no_steam_run"),
         silent=True,
         mute=True,
-        ready_when=lambda d: _find_game_exe(d) is not None,
+        ready_when=lambda d: bool(_find_game_exe(d)),
         confirm_finish=lambda: _confirm(
             kind="finish_install",
             message=(
@@ -407,13 +439,13 @@ def op_install(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
         on_progress=on_progress,
     )
 
-    exe = _find_game_exe(target_dir)
-    if exe is None:
+    exes = _find_game_exe(target_dir)
+    if not exes:
         raise BridgeError(f"Installed, but no game exe found under {target_dir}.")
 
     result: dict[str, Any] = {
         "name": repack.game_name,
-        "exe": str(exe),
+        "exe": str(exes[0]),
         "steam_added": False,
         "appid": None,
         "manual_steps": ["Set the Proton version in Steam: Properties > Compatibility."],
@@ -426,6 +458,8 @@ def op_install(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
                 0, "Steam is running: close it, then retry adding the shortcut."
             )
         else:
+            exe = _choose_exe(exes)
+            result["exe"] = str(exe)
             shortcut = _add_shortcut(repack.game_name, exe, app_menu=not args.get("no_app_menu"))
             result.update(steam_added=True, **shortcut)
     return result

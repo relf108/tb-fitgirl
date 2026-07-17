@@ -196,11 +196,19 @@ def _find_repack_dir(target: str, downloads: Path) -> Path | None:
     return next((p for p in candidates if needle in p.name.lower()), None)
 
 
-def _find_game_exe(game_dir: Path) -> Path | None:
-    """Best guess at the main game executable after install."""
+def _find_game_exe(game_dir: Path) -> list[Path]:
+    """All game executables under *game_dir*, sorted by size, largest first."""
     skip = ("unins", "setup", "dxwebsetup", "vcredist", "dotnet", "redist", "crashhandler")
     exes = [p for p in game_dir.rglob("*.exe") if not any(s in p.name.lower() for s in skip)]
-    return max(exes, key=lambda p: p.stat().st_size, default=None)
+
+    def _size(p: Path) -> int:
+        try:  # files may vanish mid-install: this runs from the watcher poll
+            return p.stat().st_size
+        except OSError:
+            return 0
+
+    exes.sort(key=_size, reverse=True)
+    return exes
 
 
 def _confirm_finish_prompt() -> bool:
@@ -251,10 +259,11 @@ def cmd_steam_add(args: argparse.Namespace) -> int:
     if not game_dir.is_dir():
         print(f"No installed game directory found for '{args.target}'.")
         return 1
-    exe = _find_game_exe(game_dir)
-    if exe is None:
+    exes = _find_game_exe(game_dir)
+    if not exes:
         print(f"No game exe found under {game_dir}.")
         return 1
+    exe = exes[0]
     try:
         _add_steam_shortcut(game_dir.name, exe, args.target)
     except steam.SteamNotFound:
@@ -381,7 +390,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     # redists that are irrelevant under Proton and can hang for ages, but
     # killing it too early truncates files still being written.
     # In --gui mode leave the installer alone so the user drives it.
-    ready_when = None if args.gui else (lambda d: _find_game_exe(d) is not None)
+    ready_when = None if args.gui else (lambda d: bool(_find_game_exe(d)))
     install(
         repack,
         target,
@@ -397,10 +406,11 @@ def cmd_install(args: argparse.Namespace) -> int:
     if progress is not None:
         print()  # end the progress line
 
-    exe = _find_game_exe(target)
-    if exe is None:
+    exes = _find_game_exe(target)
+    if not exes:
         print(f"Installed, but no game exe found under {target}.")
         return 1
+    exe = exes[0]
     print(f"Installed: {exe}")
 
     if not args.no_steam:

@@ -64,7 +64,8 @@ class _InstallScreenState extends State<InstallScreen> {
             'api_key': widget.apiKey,
           },
           onProgress: _onProgress,
-          onConfirm: _onConfirm);
+          onConfirm: _onConfirm,
+          onSelectExe: _onSelectExe);
       _operation = operation;
       final result = await operation.result;
       if (!mounted) return;
@@ -114,6 +115,37 @@ class _InstallScreenState extends State<InstallScreen> {
       ),
     );
     return answer ?? false;
+  }
+
+  Future<String> _onSelectExe(List<String> exes) async {
+    if (!mounted) return exes.first;
+    final selected = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => AlertDialog(
+        title: const Text('Select executable'),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Multiple executables found. Choose which one to add '
+                'as the Steam shortcut:',
+              ),
+              const SizedBox(height: 12),
+              for (final exe in exes)
+                ListTile(
+                  title: Text(exe.split(RegExp(r'[/\\]')).last),
+                  subtitle: Text(exe),
+                  onTap: () => Navigator.of(context).pop(exe),
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+    return selected ?? exes.first;
   }
 
   Future<void> _cancel() async {
@@ -237,7 +269,8 @@ class _InstallScreenState extends State<InstallScreen> {
 
   Future<void> _retrySteamAdd() async {
     try {
-      final data = await runBridgeOp('steam_add', {'target': widget.title});
+      final data = await runBridgeOp('steam_add', {'target': widget.title},
+          onSelectExe: _onSelectExe);
       if (!mounted) return;
       setState(() {
         _result = {

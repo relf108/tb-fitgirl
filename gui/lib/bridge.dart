@@ -109,6 +109,7 @@ class BridgeOperation {
     Map<String, dynamic> args, {
     void Function(BridgeProgress progress)? onProgress,
     Future<bool> Function(String kind, String message)? onConfirm,
+    Future<String> Function(List<String> exes)? onSelectExe,
   }) async {
     final launch = _resolveBridge();
     if (launch == null) {
@@ -181,6 +182,25 @@ class BridgeOperation {
                   .writeln(jsonEncode({'id': reqId, 'confirm': answer}));
               await process.stdin.flush();
             }();
+          case 'multiple_exes':
+            // The bridge found >1 game exe and asks which to use. It blocks
+            // until we write back a selection. Without a handler, pick the
+            // first one (same as the bridge default when stdin is closed).
+            final mReqId = decoded['id'];
+            () async {
+              var selected = '';
+              if (onSelectExe != null) {
+                final exeList = (payload['exes'] as List<dynamic>? ?? [])
+                    .cast<String>();
+                if (exeList.isNotEmpty) {
+                  selected = await onSelectExe(exeList);
+                }
+              }
+              process.stdin.writeln(
+                jsonEncode({'id': mReqId, 'selected': selected}),
+              );
+              await process.stdin.flush();
+            }();
           case 'result':
             completer.complete(payload);
           case 'error':
@@ -235,12 +255,14 @@ Future<Map<String, dynamic>> runBridgeOp(
   Map<String, dynamic> args, {
   void Function(BridgeProgress progress)? onProgress,
   Future<bool> Function(String kind, String message)? onConfirm,
+  Future<String> Function(List<String> exes)? onSelectExe,
 }) async {
   final operation = await BridgeOperation.start(
     op,
     args,
     onProgress: onProgress,
     onConfirm: onConfirm,
+    onSelectExe: onSelectExe,
   );
   return operation.result;
 }
