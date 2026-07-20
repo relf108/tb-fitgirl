@@ -36,8 +36,6 @@ class RootScreen extends StatefulWidget {
 }
 
 class _RootScreenState extends State<RootScreen> {
-  static const _store = ApiKeyStore();
-
   String? _apiKey;
   bool _loading = true;
 
@@ -48,7 +46,7 @@ class _RootScreenState extends State<RootScreen> {
   }
 
   Future<void> _loadKey() async {
-    final key = await _store.load();
+    final key = await torboxKeyStore.load();
     if (!mounted) return;
     setState(() {
       _apiKey = key;

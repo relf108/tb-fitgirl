@@ -1,6 +1,8 @@
 """Game metadata from the Steam storefront (appids, names, artwork).
 
 Uses the keyless public store search endpoint plus the app-artwork CDN.
+Optional SteamGridDB icons (when a key is available) are preferred for
+shortcut / .desktop icons; the store header remains the library capsule.
 Everything here is best-effort: repack titles don't always match store
 names, and an install must never fail because artwork couldn't be fetched
 (callers use :func:`find_icon`, which swallows failures and returns None).
@@ -8,16 +10,21 @@ names, and an install must never fail because artwork couldn't be fetched
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 import httpx
 
+STEAM_GRID_DB_ICONS_URL = "https://www.steamgriddb.com/api/v2/icons/steam/{appid}"
 STORE_SEARCH_URL = "https://store.steampowered.com/api/storesearch/"
 CDN_HEADER_URL = "https://cdn.cloudflare.steamstatic.com/steam/apps/{appid}/header.jpg"
 
 ICONS_DIR = "~/.tb-fitgirl/icons"
+CONFIG_DIR = "~/.config/tb-fitgirl"
+STEAMGRIDDB_KEY_FILE = "steamgriddb_api_key"
 
 DEFAULT_TIMEOUT = 15.0
 
@@ -33,6 +40,55 @@ class StoreMatch:
 
 def _normalise(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", name.lower()).strip()
+
+
+def _steamgriddb_api_key(api_key: str | None = None) -> str:
+    """Resolve key: explicit arg → env → ~/.config/tb-fitgirl/steamgriddb_api_key."""
+    if api_key and (stripped := api_key.strip()):
+        return stripped
+    env = (os.environ.get("STEAMGRIDDB_API_KEY") or "").strip()
+    if env:
+        return env
+    path = Path(CONFIG_DIR).expanduser() / STEAMGRIDDB_KEY_FILE
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+def steam_grid_db_search(
+    appid: int,
+    *,
+    api_key: str | None = None,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> str | None:
+    """Top-voted SteamGridDB icon URL for a Steam *appid*, or None.
+
+    Needs a SteamGridDB API key (arg, ``STEAMGRIDDB_API_KEY``, or config file).
+    Missing key / empty results return None; HTTP failures propagate.
+    """
+    key = _steamgriddb_api_key(api_key)
+    if not key:
+        return None
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        resp = client.get(
+            STEAM_GRID_DB_ICONS_URL.format(appid=appid),
+            headers={"Authorization": f"Bearer {key}"},
+        )
+        resp.raise_for_status()
+        payload = resp.json()
+    if not isinstance(payload, dict) or not payload.get("success"):
+        return None
+    items = payload.get("data") or []
+    if not isinstance(items, list):
+        return None
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or item.get("thumb") or "").strip()
+        if url:
+            return url
+    return None
 
 
 def store_search(term: str, *, timeout: float = DEFAULT_TIMEOUT) -> list[StoreMatch]:
@@ -97,12 +153,62 @@ def fetch_artwork(
     return target
 
 
-def find_icon(game_name: str, *, icons_dir: Path | str = ICONS_DIR) -> Path | None:
-    """Best-effort artwork for a game name. Never raises."""
+def fetch_url_artwork(
+    url: str,
+    appid: int,
+    *,
+    icons_dir: Path | str = ICONS_DIR,
+    timeout: float = DEFAULT_TIMEOUT,
+) -> Path:
+    """Download (and cache) *url* as icon art for *appid*; returns its path."""
+    directory = Path(icons_dir).expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    suffix = Path(urlparse(url).path).suffix.lower() or ".png"
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".ico"}:
+        suffix = ".png"
+    # Distinct from header cache ({appid}.jpg) so both can coexist.
+    target = directory / f"{appid}.icon{suffix}"
+    if target.is_file() and target.stat().st_size > 0:
+        return target
+    with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+        resp = client.get(url)
+        resp.raise_for_status()
+    target.write_bytes(resp.content)
+    return target
+
+
+def find_header(game_name: str, *, icons_dir: Path | str = ICONS_DIR) -> Path | None:
+    """Steam store header (wide capsule) for *game_name*, or None. Never raises."""
     try:
         match = best_match(game_name, store_search(game_name))
         if match is None:
             return None
+        return fetch_artwork(match.appid, icons_dir=icons_dir)
+    except (httpx.HTTPError, OSError, ValueError):
+        return None
+
+
+def find_icon(
+    game_name: str,
+    *,
+    icons_dir: Path | str = ICONS_DIR,
+    api_key: str | None = None,
+) -> Path | None:
+    """Best-effort icon for a game name. Never raises.
+
+    Prefers a SteamGridDB icon when a key is available; falls back to the
+    Steam store header.
+    """
+    try:
+        match = best_match(game_name, store_search(game_name))
+        if match is None:
+            return None
+        try:
+            icon_url = steam_grid_db_search(match.appid, api_key=api_key)
+            if icon_url:
+                return fetch_url_artwork(icon_url, match.appid, icons_dir=icons_dir)
+        except (httpx.HTTPError, OSError, ValueError):
+            pass
         return fetch_artwork(match.appid, icons_dir=icons_dir)
     except (httpx.HTTPError, OSError, ValueError):
         return None

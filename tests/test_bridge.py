@@ -588,9 +588,11 @@ def test_library_empty(tmp_path, monkeypatch, capsys):
 
 
 @respx.mock
-def test_metadata_lookup(monkeypatch, capsys):
+def test_metadata_lookup(monkeypatch, capsys, tmp_path):
     from tb_fitgirl.metadata import STORE_SEARCH_URL
 
+    monkeypatch.delenv("STEAMGRIDDB_API_KEY", raising=False)
+    monkeypatch.setattr("tb_fitgirl.metadata.CONFIG_DIR", str(tmp_path / "no-sgdb"))
     route = respx.get(STORE_SEARCH_URL).mock(
         return_value=Response(
             200,
@@ -607,6 +609,42 @@ def test_metadata_lookup(monkeypatch, capsys):
     assert data == {"appid": 391540, "name": "DELTARUNE", "image": "https://cdn/x.jpg"}
     # The store is queried with the de-noised game name, not the post title.
     assert route.calls[0].request.url.params["term"] == "DELTARUNE"
+
+
+@respx.mock
+def test_metadata_prefers_steamgriddb_icon(monkeypatch, capsys):
+    from tb_fitgirl.metadata import STEAM_GRID_DB_ICONS_URL, STORE_SEARCH_URL
+
+    monkeypatch.delenv("STEAMGRIDDB_API_KEY", raising=False)
+    respx.get(STORE_SEARCH_URL).mock(
+        return_value=Response(
+            200,
+            json={
+                "items": [
+                    {"id": 391540, "name": "DELTARUNE", "tiny_image": "https://cdn/x.jpg"},
+                ]
+            },
+        )
+    )
+    respx.get(STEAM_GRID_DB_ICONS_URL.format(appid=391540)).mock(
+        return_value=Response(
+            200,
+            json={"success": True, "data": [{"url": "https://cdn.steamgriddb.com/icon/d.png"}]},
+        )
+    )
+    events = run_bridge(
+        [
+            {
+                "id": 1,
+                "op": "metadata",
+                "args": {"name": "DELTARUNE", "steamgriddb_api_key": "sgdb"},
+            }
+        ],
+        monkeypatch,
+        capsys,
+    )
+    data = events_of(events, "result")[0]["data"]
+    assert data["image"] == "https://cdn.steamgriddb.com/icon/d.png"
 
 
 @respx.mock
@@ -631,9 +669,12 @@ def test_steam_add_passes_icon(tmp_path, monkeypatch, capsys):
     game.mkdir()
     (game / "DELTARUNE.exe").write_bytes(b"MZ" + b"\0" * 100)
 
-    icon = tmp_path / "391540.jpg"
-    icon.write_bytes(b"jpg")
+    icon = tmp_path / "391540.icon.png"
+    icon.write_bytes(b"png")
+    header = tmp_path / "391540.jpg"
+    header.write_bytes(b"jpg")
     monkeypatch.setattr("tb_fitgirl.bridge.find_icon", lambda name, **kw: icon)
+    monkeypatch.setattr("tb_fitgirl.bridge.find_header", lambda name, **kw: header)
     seen = {}
 
     def fake_add_shortcut(name, exe, **kw):
@@ -659,8 +700,8 @@ def test_steam_add_passes_icon(tmp_path, monkeypatch, capsys):
     assert data["icon"] == str(icon)
     assert seen["shortcut_icon"] == icon
     assert seen["desktop_icon"] == str(icon)
-    # Header art is installed as the shortcut's Steam library capsule too.
-    assert seen["grid"] == (999, icon)
+    # Wide Steam header is the library capsule; SGDB icon is the shortcut icon.
+    assert seen["grid"] == (999, header)
     assert data["grid"] == str(tmp_path / "grid" / "999.jpg")
 
 

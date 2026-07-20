@@ -26,8 +26,10 @@ cancelled by killing the bridge process (front-ends run one bridge per
 operation), so there is no in-band cancel.
 
 All ops accept an optional ``api_key`` arg; TORBOX_API_KEY is the fallback.
-Flutter (or any other front-end) is presentation only: every piece of
-TorBox/Proton logic stays in the library modules this bridge drives.
+Optional ``steamgriddb_api_key`` (or STEAMGRIDDB_API_KEY) upgrades icon
+lookups via SteamGridDB. Flutter (or any other front-end) is presentation
+only: every piece of TorBox/Proton logic stays in the library modules this
+bridge drives.
 """
 
 from __future__ import annotations
@@ -47,7 +49,7 @@ from .cli import _find_game_exe, _find_installed_dir, _find_repack_dir, _resolve
 from .desktop import APPLICATIONS_DIR, remove_desktop_entry, write_desktop_entry
 from .downloader import Downloader
 from .installer import InstallError, find_repack, install, verify_bins
-from .metadata import best_match, find_icon, store_search
+from .metadata import best_match, find_header, find_icon, steam_grid_db_search, store_search
 from .models import Torrent, TorrentFile, human_size, magnet_hash
 from .scrapers import DEFAULT_SCRAPER, SCRAPERS, get_scraper
 from .torbox import TorboxClient, TorboxError
@@ -284,17 +286,24 @@ def op_download(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
     return {"path": str(_download(emit, args, dest))}
 
 
+def _sgdb_key(args: dict[str, Any]) -> str | None:
+    key = args.get("steamgriddb_api_key")
+    return str(key).strip() if key else None
+
+
 def _add_shortcut(name: str, exe: Path, *, app_menu: bool) -> dict[str, Any]:
     if steam.steam_running():
         raise BridgeError("Steam is running; close it and retry.")
+    # Icon: SteamGridDB when keyed, else store header. Grid capsule: always
+    # prefer the wide Steam header so library tiles don't stretch a square icon.
     icon = find_icon(name)  # best-effort, None on any failure
+    header = find_header(name)
     appid = steam.add_shortcut(name, exe, icon=icon)
     grid = None
-    if icon is not None:
-        # The same art doubles as the library header: it *is* Steam's wide
-        # capsule format (460x215). Best-effort like the icon itself.
+    capsule = header or icon
+    if capsule is not None:
         try:
-            grid = steam.set_grid_art(appid, icon)
+            grid = steam.set_grid_art(appid, capsule)
         except (steam.SteamNotFound, OSError):
             grid = None
     entry = write_desktop_entry(name, appid, icon=str(icon) if icon else None) if app_menu else None
@@ -484,7 +493,8 @@ def op_metadata(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
     """Steam store lookup for a game name (appid/canonical name/thumbnail).
 
     Best-effort by design: unknown or unmatched names yield null fields
-    rather than an error.
+    rather than an error. When a SteamGridDB key is available, prefer its
+    icon URL over the storefront tiny image.
     """
     name = str(args.get("name") or "")
     if not name:
@@ -496,7 +506,14 @@ def op_metadata(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:
         match = None
     if match is None:
         return {"appid": None, "name": None, "image": None}
-    return {"appid": match.appid, "name": match.name, "image": match.tiny_image or None}
+    image = match.tiny_image or None
+    try:
+        sgdb = steam_grid_db_search(match.appid, api_key=_sgdb_key(args))
+        if sgdb:
+            image = sgdb
+    except httpx.HTTPError:
+        pass
+    return {"appid": match.appid, "name": match.name, "image": image}
 
 
 def op_library(emit: EmitFn, args: dict[str, Any]) -> dict[str, Any]:

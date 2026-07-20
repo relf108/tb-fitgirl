@@ -16,8 +16,6 @@ class SetupScreen extends StatefulWidget {
 }
 
 class _SetupScreenState extends State<SetupScreen> {
-  static const _store = ApiKeyStore();
-
   final _controller = TextEditingController();
   bool _busy = false;
   String? _error;
@@ -40,7 +38,7 @@ class _SetupScreenState extends State<SetupScreen> {
     try {
       final data = await runBridgeOp('validate_key', {'api_key': key});
       final account = AccountInfo.fromJson(data);
-      final stored = await _store.save(key);
+      final stored = await torboxKeyStore.save(key);
       if (!mounted) return;
       setState(() => _account = account);
       if (!stored) {

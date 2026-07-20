@@ -10,6 +10,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
+import 'keyring.dart';
+
 class BridgeProgress {
   const BridgeProgress({
     required this.phase,
@@ -122,12 +124,17 @@ class BridgeOperation {
     // cancel() can kill the whole tree (Proton unpackers included). Do NOT
     // wrap it in setsid: losing the session/terminal makes Proton's
     // unpacker hang (kernel snd_power_wait on the installer's audio).
+    final env = Map<String, String>.from(Platform.environment);
+    final sgdbKey = await steamGridDbKeyStore.load();
+    if (sgdbKey != null && sgdbKey.isNotEmpty) {
+      env['STEAMGRIDDB_API_KEY'] = sgdbKey;
+    }
     final Process process;
     if (launch is _InstalledBridge) {
       process = await Process.start(
         'tb-fitgirl-bridge',
         [],
-        environment: Platform.environment,
+        environment: env,
       );
     } else {
       final dev = launch as _DevBridge;
@@ -137,7 +144,7 @@ class BridgeOperation {
         ['-m', 'tb_fitgirl.bridge'],
         workingDirectory: dev.backendDir.path,
         environment: {
-          ...Platform.environment,
+          ...env,
           'PYTHONPATH': '${dev.backendDir.path}/src',
         },
       );

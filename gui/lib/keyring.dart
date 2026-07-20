@@ -1,30 +1,54 @@
-/// TorBox API key storage.
+/// API key storage (TorBox and optional SteamGridDB).
 ///
 /// Priority order for reads:
 ///   1. OS keyring via `secret-tool` (libsecret)
-///   2. ~/.config/tb-fitgirl/api_key  (mode 0600, fallback when no keyring)
-///   3. TORBOX_API_KEY environment variable (read-only override)
+///   2. ~/.config/tb-fitgirl/<file>  (mode 0600, fallback when no keyring)
+///   3. Environment variable (read-only override)
 ///
 /// Writes go to the keyring when available, otherwise to the config file.
 library;
 
 import 'dart:io';
 
-const _attrs = ['service', 'tb-fitgirl'];
+/// TorBox API key (required).
+const torboxKeyStore = ApiKeyStore(
+  configName: 'api_key',
+  keyringAttrs: ['service', 'tb-fitgirl'],
+  keyringLabel: 'TorBox API key (tb-fitgirl)',
+  envVar: 'TORBOX_API_KEY',
+);
 
-File get _configFile {
-  final home = Platform.environment['HOME'] ?? '/tmp';
-  return File('$home/.config/tb-fitgirl/api_key');
-}
+/// SteamGridDB API key (optional; upgrades search thumbnails).
+const steamGridDbKeyStore = ApiKeyStore(
+  configName: 'steamgriddb_api_key',
+  keyringAttrs: ['service', 'tb-fitgirl-steamgriddb'],
+  keyringLabel: 'SteamGridDB API key (tb-fitgirl)',
+  envVar: 'STEAMGRIDDB_API_KEY',
+);
 
 class ApiKeyStore {
-  const ApiKeyStore();
+  const ApiKeyStore({
+    required this.configName,
+    required this.keyringAttrs,
+    required this.keyringLabel,
+    required this.envVar,
+  });
+
+  final String configName;
+  final List<String> keyringAttrs;
+  final String keyringLabel;
+  final String envVar;
+
+  File get _configFile {
+    final home = Platform.environment['HOME'] ?? '/tmp';
+    return File('$home/.config/tb-fitgirl/$configName');
+  }
 
   /// Load in priority order: keyring → config file → env var.
   Future<String?> load() async {
     // 1. Keyring.
     try {
-      final result = await Process.run('secret-tool', ['lookup', ..._attrs]);
+      final result = await Process.run('secret-tool', ['lookup', ...keyringAttrs]);
       final key = (result.stdout as String).trim();
       if (result.exitCode == 0 && key.isNotEmpty) return key;
     } on ProcessException {
@@ -40,7 +64,7 @@ class ApiKeyStore {
     }
 
     // 3. Environment variable.
-    final env = Platform.environment['TORBOX_API_KEY']?.trim();
+    final env = Platform.environment[envVar]?.trim();
     return (env != null && env.isNotEmpty) ? env : null;
   }
 
@@ -50,8 +74,8 @@ class ApiKeyStore {
     try {
       final process = await Process.start('secret-tool', [
         'store',
-        '--label=TorBox API key (tb-fitgirl)',
-        ..._attrs,
+        '--label=$keyringLabel',
+        ...keyringAttrs,
       ]);
       process.stdin.write(key);
       await process.stdin.close();
@@ -60,7 +84,7 @@ class ApiKeyStore {
       // No secret-tool or no daemon — fall through to config file.
     }
 
-    // Fallback: write to ~/.config/tb-fitgirl/api_key with mode 0600.
+    // Fallback: write to config file with mode 0600.
     try {
       final file = _configFile;
       await file.parent.create(recursive: true);
@@ -74,7 +98,7 @@ class ApiKeyStore {
 
   Future<void> clear() async {
     try {
-      await Process.run('secret-tool', ['clear', ..._attrs]);
+      await Process.run('secret-tool', ['clear', ...keyringAttrs]);
     } on ProcessException {
       // Ignore.
     }
@@ -85,3 +109,4 @@ class ApiKeyStore {
     }
   }
 }
+

@@ -1,16 +1,28 @@
+from pathlib import Path
+
 import httpx
 import respx
 from httpx import Response
 
+from tb_fitgirl import metadata as metadata_mod
 from tb_fitgirl.metadata import (
     CDN_HEADER_URL,
+    STEAM_GRID_DB_ICONS_URL,
+    STEAMGRIDDB_KEY_FILE,
     STORE_SEARCH_URL,
     StoreMatch,
     best_match,
     fetch_artwork,
     find_icon,
+    steam_grid_db_search,
     store_search,
 )
+
+
+def _no_sgdb_key(monkeypatch, tmp_path: Path) -> None:
+    """Ensure neither env nor config file supplies a SteamGridDB key."""
+    monkeypatch.delenv("STEAMGRIDDB_API_KEY", raising=False)
+    monkeypatch.setattr(metadata_mod, "CONFIG_DIR", str(tmp_path / "empty-cfg"))
 
 
 @respx.mock
@@ -69,7 +81,8 @@ def test_fetch_artwork_downloads_and_caches(tmp_path):
 
 
 @respx.mock
-def test_find_icon_happy_path(tmp_path):
+def test_find_icon_falls_back_to_header_without_key(tmp_path, monkeypatch):
+    _no_sgdb_key(monkeypatch, tmp_path)
     respx.get(STORE_SEARCH_URL).mock(
         return_value=Response(200, json={"items": [{"id": 391540, "name": "DELTARUNE"}]})
     )
@@ -80,7 +93,32 @@ def test_find_icon_happy_path(tmp_path):
 
 
 @respx.mock
-def test_find_icon_never_raises(tmp_path):
+def test_find_icon_prefers_steamgriddb(tmp_path, monkeypatch):
+    monkeypatch.setenv("STEAMGRIDDB_API_KEY", "sgdb-key")
+    respx.get(STORE_SEARCH_URL).mock(
+        return_value=Response(200, json={"items": [{"id": 391540, "name": "DELTARUNE"}]})
+    )
+    respx.get(STEAM_GRID_DB_ICONS_URL.format(appid=391540)).mock(
+        return_value=Response(
+            200,
+            json={
+                "success": True,
+                "data": [{"url": "https://cdn.steamgriddb.com/icon/deltarune.png"}],
+            },
+        )
+    )
+    respx.get("https://cdn.steamgriddb.com/icon/deltarune.png").mock(
+        return_value=Response(200, content=b"pngbytes")
+    )
+    path = find_icon("DELTARUNE", icons_dir=tmp_path)
+    assert path is not None
+    assert path == tmp_path / "391540.icon.png"
+    assert path.read_bytes() == b"pngbytes"
+
+
+@respx.mock
+def test_find_icon_never_raises(tmp_path, monkeypatch):
+    _no_sgdb_key(monkeypatch, tmp_path)
     respx.get(STORE_SEARCH_URL).mock(side_effect=httpx.ConnectError("offline"))
     assert find_icon("DELTARUNE", icons_dir=tmp_path) is None
 
@@ -89,3 +127,66 @@ def test_find_icon_never_raises(tmp_path):
     )
     respx.get(CDN_HEADER_URL.format(appid=391540)).mock(return_value=Response(404, content=b""))
     assert find_icon("DELTARUNE", icons_dir=tmp_path) is None
+
+
+def test_steam_grid_db_search_no_key(tmp_path, monkeypatch):
+    _no_sgdb_key(monkeypatch, tmp_path)
+    assert steam_grid_db_search(391540) is None
+
+
+@respx.mock
+def test_steam_grid_db_search_returns_top_url(monkeypatch):
+    monkeypatch.setenv("STEAMGRIDDB_API_KEY", "test-sgdb-key")
+    route = respx.get(STEAM_GRID_DB_ICONS_URL.format(appid=391540)).mock(
+        return_value=Response(
+            200,
+            json={
+                "success": True,
+                "data": [
+                    {"id": 1, "url": "https://cdn.steamgriddb.com/icon/a.png", "thumb": "t.png"},
+                    {"id": 2, "url": "https://cdn.steamgriddb.com/icon/b.png"},
+                ],
+            },
+        )
+    )
+    assert steam_grid_db_search(391540) == "https://cdn.steamgriddb.com/icon/a.png"
+    assert route.calls[0].request.headers["Authorization"] == "Bearer test-sgdb-key"
+
+
+@respx.mock
+def test_steam_grid_db_search_reads_config_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("STEAMGRIDDB_API_KEY", raising=False)
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / STEAMGRIDDB_KEY_FILE).write_text("file-key\n", encoding="utf-8")
+    monkeypatch.setattr(metadata_mod, "CONFIG_DIR", str(cfg))
+    route = respx.get(STEAM_GRID_DB_ICONS_URL.format(appid=1)).mock(
+        return_value=Response(
+            200,
+            json={"success": True, "data": [{"url": "https://cdn.example/i.png"}]},
+        )
+    )
+    assert steam_grid_db_search(1) == "https://cdn.example/i.png"
+    assert route.calls[0].request.headers["Authorization"] == "Bearer file-key"
+
+
+@respx.mock
+def test_steam_grid_db_search_empty_data(monkeypatch):
+    monkeypatch.setenv("STEAMGRIDDB_API_KEY", "k")
+    respx.get(STEAM_GRID_DB_ICONS_URL.format(appid=1)).mock(
+        return_value=Response(200, json={"success": True, "data": []})
+    )
+    assert steam_grid_db_search(1) is None
+
+
+@respx.mock
+def test_steam_grid_db_search_explicit_key_overrides_env(monkeypatch):
+    monkeypatch.setenv("STEAMGRIDDB_API_KEY", "env-key")
+    route = respx.get(STEAM_GRID_DB_ICONS_URL.format(appid=9)).mock(
+        return_value=Response(
+            200,
+            json={"success": True, "data": [{"url": "https://cdn.example/i.png"}]},
+        )
+    )
+    assert steam_grid_db_search(9, api_key="arg-key") == "https://cdn.example/i.png"
+    assert route.calls[0].request.headers["Authorization"] == "Bearer arg-key"
