@@ -1,4 +1,4 @@
-.PHONY: qa fmt test check gui-create gui-run gui-build gui-test update-pubspec-json appimage
+.PHONY: qa fmt test check gui-create gui-run gui-build gui-test update-pubspec-json appimage appimage-docker
 
 qa:
 	ruff check src tests
@@ -30,8 +30,14 @@ gui-test: gui-create
 
 # Single-file AppImage: Flutter GUI + frozen Python CLI/bridge. Output under dist/.
 # Needs flutter, python3 (venv+pip), and network (pip + appimagetool) on first run.
+# WARNING: on NixOS this links Flutter against /nix/store — not portable.
+# For release / non-NixOS targets use `make appimage-docker` (or CI).
 appimage:
 	bash scripts/build-appimage.sh
+
+# Portable AppImage via Ubuntu 22.04 container (FHS glibc baseline).
+appimage-docker:
+	bash scripts/build-appimage-docker.sh
 
 # Keep gui/pubspec.lock.json in sync with gui/pubspec.lock after `flutter pub upgrade`.
 # The JSON copy lets the Nix flake read the lock without import-from-derivation.

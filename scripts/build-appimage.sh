@@ -57,6 +57,8 @@ log "Building Flutter Linux release"
     flutter create --platforms=linux --project-name tbfg_gui --no-pub .
   fi
   flutter pub get
+  # Flutter 3.16+ install step expects this dir even with no native assets.
+  mkdir -p build/native_assets/linux
   flutter build linux --release
 )
 

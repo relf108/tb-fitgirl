@@ -1,0 +1,78 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Linux desktop build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang cmake ninja-build pkg-config \
+            libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            python3 python3-pip python3-venv \
+            libpython3.10 libpython3.10-dev \
+            curl file
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Flutter Linux desktop
+        run: flutter config --enable-linux-desktop && flutter doctor -v
+
+      - name: Build AppImage
+        run: bash scripts/build-appimage.sh
+
+      - name: Verify FHS loader (no /nix/store interpreter)
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          imgs=(dist/tb-fitgirl-*-x86_64.AppImage)
+          test ${#imgs[@]} -eq 1
+          img="${imgs[0]}"
+          test -x "$img"
+          mkdir -p /tmp/ai-check
+          cd /tmp/ai-check
+          "$GITHUB_WORKSPACE/$img" --appimage-extract >/dev/null
+          interp=$(readelf -l squashfs-root/usr/opt/tbfg_gui/tbfg_gui \
+            | sed -n 's/.*Requesting program interpreter: \([^]]*\)].*/\1/p')
+          echo "GUI interpreter: ${interp}"
+          case "$interp" in
+            /lib64/ld-linux-x86-64.so.2|/lib/ld-linux-x86-64.so.2) ;;
+            *) echo "non-FHS interpreter: $interp" >&2; exit 1 ;;
+          esac
+          if strings squashfs-root/usr/opt/tbfg_gui/tbfg_gui | grep -q '/nix/store'; then
+            echo "GUI binary still references /nix/store" >&2
+            exit 1
+          fi
+          ./squashfs-root/usr/bin/tb-fitgirl --help | head -5
+          ls -lh "$GITHUB_WORKSPACE/$img"
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: appimage-x86_64
+          path: dist/tb-fitgirl-*-x86_64.AppImage
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/tb-fitgirl-*-x86_64.AppImage
+          body_path: CHANGELOG.md
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -14,7 +14,9 @@ one Proton runtime. On NixOS, `steam-run` on PATH is picked up automatically.
 
 ### AppImage (recommended for non-NixOS)
 
-One file with the GUI plus frozen CLI/bridge (no host Python):
+One file with the GUI plus frozen CLI/bridge (no host Python). Grab the
+`.AppImage` from [GitHub Releases](https://github.com/relf108/tb-fitgirl/releases)
+(built on Ubuntu 22.04 so it runs on normal FHS distros):
 
 ```sh
 chmod +x tb-fitgirl-*-x86_64.AppImage
@@ -23,14 +25,21 @@ chmod +x tb-fitgirl-*-x86_64.AppImage
 ./tb-fitgirl-*-x86_64.AppImage --bridge             # JSON-lines bridge
 ```
 
-Build it yourself (needs Flutter, Python 3.10+ with venv/pip, a C compiler
-for the process-group wrapper, and network on first run for pip +
-appimagetool; freezes the Python side with PyInstaller so the AppImage has
-no host-Python dependency):
+Needs host `libgtk-3`, `secret-tool` (libsecret), and Steam + Proton.
+
+Build it yourself:
 
 ```sh
-make appimage    # -> dist/tb-fitgirl-<version>-x86_64.AppImage
+# Portable (Ubuntu 22.04 container) — use this on NixOS / for releases
+make appimage-docker   # -> dist/tb-fitgirl-<version>-x86_64.AppImage
+
+# Native host build (Debian/Ubuntu with Flutter + Python 3.10+)
+make appimage
 ```
+
+Do **not** ship an AppImage built on NixOS: Flutter embeds `/nix/store`
+paths and the GUI will not start on other distros. NixOS users should
+install via the flake (below) instead.
 
 The GUI stores your TorBox API key in the OS keyring (`secret-tool`); set
 `TORBOX_API_KEY` in the environment as a read-only fallback.
