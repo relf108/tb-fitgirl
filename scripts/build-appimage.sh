@@ -149,17 +149,19 @@ build_pgrp_exec() {
   # NixOS: pkgsStatic produces a musl-static binary without host glibc.
   if [[ -e /etc/NIXOS ]] && command -v nix-build >/dev/null 2>&1; then
     local store
+    # Nix path literal (absolute, no spaces). Do not bash-@Q — single
+    # quotes are invalid in Nix and silently kill this fallback.
     store="$(
       nix-build --no-out-link -E "
         with import <nixpkgs> {};
         pkgsStatic.stdenv.mkDerivation {
           name = \"pgrp-exec\";
-          src = ${PGRP_SRC@Q};
+          src = ${PGRP_SRC};
           dontUnpack = true;
           buildPhase = \"\$CC -O2 -s -static -o pgrp-exec \$src\";
           installPhase = \"mkdir -p \$out/bin; cp pgrp-exec \$out/bin/\";
         }
-      " 2>/dev/null
+      "
     )" || true
     if [[ -n "${store:-}" && -x "${store}/bin/pgrp-exec" ]]; then
       cp "${store}/bin/pgrp-exec" "$PGRP_BIN"

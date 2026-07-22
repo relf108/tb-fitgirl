@@ -22,7 +22,7 @@
 
           tb-fitgirl = python.pkgs.buildPythonApplication {
             pname = "tb-fitgirl";
-            version = "0.1.0";
+            version = "1.0.0";
             pyproject = true;
             src = self;
 
@@ -63,7 +63,7 @@
           # Linux; on Darwin the rec-level `default` falls back to tb-fitgirl.
           tb-fitgirl-gui = pkgs.flutter.buildFlutterApplication {
             pname = "tbfg-gui";
-            version = "0.1.0";
+            version = "1.0.0";
             src = "${self}/gui";
 
             # pubspec.lock.json is the JSON-serialised pubspec.lock; kept in
