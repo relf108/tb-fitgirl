@@ -41,8 +41,9 @@ Do **not** ship an AppImage built on NixOS: Flutter embeds `/nix/store`
 paths and the GUI will not start on other distros. NixOS users should
 install via the flake (below) instead.
 
-The GUI stores your TorBox API key in the OS keyring (`secret-tool`); set
-`TORBOX_API_KEY` in the environment as a read-only fallback.
+The GUI stores your TorBox API key in the OS keyring (`secret-tool`), with
+fallback to `~/.config/tb-fitgirl/api_key` (mode 0600). Set `TORBOX_API_KEY`
+in the environment as a read-only override.
 
 ### pipx / uv (CLI only)
 
@@ -62,15 +63,15 @@ echo 'TORBOX_API_KEY=<your-key>' > .env
 
 ### Installing on NixOS
 
-The flake exposes the CLI, `tb-fitgirl-bridge`, and the GUI as installable
-packages. In your NixOS config flake:
+The flake exposes `default` (GUI on Linux, CLI elsewhere), `tb-fitgirl`
+(CLI + bridge), and `tb-fitgirl-gui`. In your NixOS config flake:
 
 ```nix
 inputs.tb-fitgirl.url = "github:relf108/tb-fitgirl";
 
 # in your system configuration:
 environment.systemPackages = [
-  inputs.tb-fitgirl.packages.${pkgs.system}.default
+  inputs.tb-fitgirl.packages.${pkgs.system}.default  # GUI + bridge on PATH
 ];
 ```
 
@@ -133,8 +134,11 @@ make appimage    # single-file AppImage (GUI + CLI + bridge) -> dist/
 ```
 
 - On first run it prompts for your TorBox API key, validates it, and stores
-  it in the OS keyring via `secret-tool` (never a file). `TORBOX_API_KEY`
-  in the environment works as a read-only fallback.
+  it in the OS keyring via `secret-tool` (fallback: `~/.config/tb-fitgirl/api_key`
+  mode 0600). `TORBOX_API_KEY` in the environment is a read-only override.
+- Optional SteamGridDB API key in Settings upgrades search thumbnails and
+  shortcut icons (`STEAMGRIDDB_API_KEY` or keyring / config file). Without
+  it, Steam storefront artwork is used.
 - The GUI prefers `tb-fitgirl-bridge` on PATH (Nix/AppImage install), then
   falls back to a dev checkout via `src/tb_fitgirl/bridge.py` near the
   working directory or executable. Set `TBFG_BACKEND=/path/to/checkout`
@@ -167,9 +171,8 @@ make check   # both
 ## Notes
 
 - **TorBox**: `createtorrent` success doesn't indicate cache state; we
-  `checkcached` first. Uncached adds are limited to 60/hour. The
-  `search-api.torbox.app` endpoint is plan-gated to zero on this account,
-  so repacks are found by scraping instead.
+  `checkcached` first. Uncached adds are limited to 60/hour.
+  `search-api.torbox.app` is plan-gated, so repacks are found by scraping.
 - **Install runtime**: FitGirl's srep/lolz/precomp unpacker is Windows-only,
   so a Wine/Proton runtime is required — there's no native Linux unpack.
   Proton + the Steam Linux Runtime is used; on NixOS it's wrapped in
