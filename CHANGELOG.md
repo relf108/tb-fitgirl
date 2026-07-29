@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.0.1] — 2026-07-29
+
+### Added
+- Default app icon (launcher, AppImage, Nix package, window chrome)
+
 ## [1.0.0] — 2026-07-22
 
 First stable release.

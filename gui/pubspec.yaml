@@ -5,7 +5,7 @@
 name: tbfg_gui
 description: Flutter front-end for the tb-fitgirl Python back end.
 publish_to: none
-version: 1.0.0
+version: 1.0.1
 
 environment:
   sdk: ^3.5.0
