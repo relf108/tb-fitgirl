@@ -32,6 +32,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   String? _sgdbKey;
   String? _sgdbStatus;
 
+  static const _torboxApiUrl = 'https://torbox.app/settings';
   static const _sgdbApiUrl =
       'https://www.steamgriddb.com/profile/preferences/api';
 
@@ -147,14 +148,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     });
   }
 
-  Future<void> _openSgdbLink() async {
+  Future<void> _openLink(String url) async {
     try {
-      final result = await Process.run('xdg-open', [_sgdbApiUrl]);
+      final result = await Process.run('xdg-open', [url]);
       if (result.exitCode == 0) return;
     } on ProcessException {
       // fall through
     }
-    await Clipboard.setData(const ClipboardData(text: _sgdbApiUrl));
+    await Clipboard.setData(ClipboardData(text: url));
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(content: Text('Link copied to clipboard.')),
@@ -182,6 +183,15 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 Text(
                   '${account.email} - ${account.planName}, expires ${account.expiry}',
                 ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: TextButton.icon(
+                  onPressed: () => _openLink(_torboxApiUrl),
+                  icon: const Icon(Icons.open_in_new, size: 18),
+                  label: const Text('Get an API key'),
+                ),
+              ),
               const Divider(height: 32),
               TextField(
                 controller: _controller,
@@ -225,7 +235,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton.icon(
-                  onPressed: _openSgdbLink,
+                  onPressed: () => _openLink(_sgdbApiUrl),
                   icon: const Icon(Icons.open_in_new, size: 18),
                   label: const Text('Get an API key'),
                 ),

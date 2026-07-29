@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../bridge.dart';
 import '../keyring.dart';
@@ -21,10 +24,26 @@ class _SetupScreenState extends State<SetupScreen> {
   String? _error;
   AccountInfo? _account;
 
+  static const _torboxApiUrl = 'https://torbox.app/settings';
+
   @override
   void dispose() {
     _controller.dispose();
     super.dispose();
+  }
+
+  Future<void> _openTorboxLink() async {
+    try {
+      final result = await Process.run('xdg-open', [_torboxApiUrl]);
+      if (result.exitCode == 0) return;
+    } on ProcessException {
+      // fall through
+    }
+    await Clipboard.setData(const ClipboardData(text: _torboxApiUrl));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Link copied to clipboard.')),
+    );
   }
 
   Future<void> _validateAndSave() async {
@@ -80,6 +99,15 @@ class _SetupScreenState extends State<SetupScreen> {
                 const Text(
                   'Find it at torbox.app > Settings > API. '
                   'The key is stored in your OS keyring, never in a file.',
+                ),
+                const SizedBox(height: 8),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: TextButton.icon(
+                    onPressed: _openTorboxLink,
+                    icon: const Icon(Icons.open_in_new, size: 18),
+                    label: const Text('Get an API key'),
+                  ),
                 ),
                 const SizedBox(height: 16),
                 TextField(

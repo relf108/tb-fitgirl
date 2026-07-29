@@ -88,6 +88,8 @@
 
               install -Dm644 ${self}/gui/linux/tbfg_gui.desktop \
                 $out/share/applications/tbfg_gui.desktop
+              install -Dm644 ${self}/packaging/appimage/tbfg_gui.png \
+                $out/share/icons/hicolor/256x256/apps/tbfg_gui.png
             '';
 
             meta = {
