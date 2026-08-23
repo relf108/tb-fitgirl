@@ -103,8 +103,8 @@
           inherit tb-fitgirl;
           # On Linux the GUI is the primary entry-point; on Darwin fall back to
           # the CLI (which works fine without a display).
-          default = if pkgs.stdenv.isLinux then tb-fitgirl-gui else tb-fitgirl;
-        } // pkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          default = if pkgs.stdenv.hostPlatform.isLinux then tb-fitgirl-gui else tb-fitgirl;
+        } // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
           inherit tb-fitgirl-gui;
         });
 
@@ -135,7 +135,7 @@
               pkgs.clang
               pkgs.pkg-config
               pkgs.pyright
-            ] ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
+            ] ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
               pkgs.gtk3
               pkgs.libsecret # secret-tool, used by the GUI for API key storage
             ];
