@@ -1,5 +1,11 @@
 # Changelog
 
+## [1.0.2] — 2026-11-22
+
+### Fixed
+- Refresh Flutter dependencies for Flutter 3.50.1, including the missing `listen` dependency that prevented Nix builds.
+- Synchronize Nix package versions with the CLI and GUI release versions.
+
 ## [1.0.1] — 2026-07-29
 
 ### Added
